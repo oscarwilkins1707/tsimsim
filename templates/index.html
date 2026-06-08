@@ -1,0 +1,1249 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Options Board Trainer</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+
+<body>
+
+<!-- ================= HEADER (quote + stock panel | buttons) ================= -->
+
+<div class="page-header">
+
+    <div class="decision-time-panel">
+        <button id="audio-mode-btn" class="audio-mode-btn" onclick="toggleAudioMode()">Audio Mode</button>
+        <label class="decision-time-label">Decision time</label>
+        <div class="decision-time-row">
+            <input id="decision-time-input" type="number" min="1" placeholder="secs" class="decision-time-input">
+            <button class="decision-time-btn" onclick="setDecisionTime()">Set</button>
+        </div>
+        <div id="decision-time-status" class="decision-time-status">No limit</div>
+        <label class="decision-time-label" style="margin-top:6px;">Quote time</label>
+        <div class="decision-time-row">
+            <input id="quote-time-input" type="number" min="1" placeholder="secs" class="decision-time-input">
+            <button class="decision-time-btn" onclick="setQuoteTime()">Set</button>
+        </div>
+        <div id="quote-time-status" class="decision-time-status">No limit</div>
+        <label class="decision-time-label" style="margin-top:6px;">Stock fair</label>
+        <div class="decision-time-row">
+            <input id="stock-fair-input" type="number" step="0.01" placeholder="price" class="decision-time-input">
+            <button class="decision-time-btn" onclick="setStockFair()">Set</button>
+        </div>
+        <div id="stock-fair-status" class="decision-time-status">Actual fair</div>
+    </div>
+
+    <div class="header-center">
+
+        <div class="stock-quote-group">
+            <div class="stock-quote">
+                <div class="prices">
+                    <span id="stock-bid">{{ stock_spread.bid }}</span>
+                    -
+                    <span id="stock-offer">{{ stock_spread.offer }}</span>
+                </div>
+                <div class="sizes">
+                    <span id="stock-bid-size">{{ stock_spread.bid_size }}x</span>
+                    <span id="stock-offer-size">{{ stock_spread.offer_size }}x</span>
+                </div>
+            </div>
+            <div class="rc">{{ rc }}</div>
+        </div>
+
+        <div class="stock-trade-panel">
+            <h3 class="stock-trade-title">Stock</h3>
+            <div class="stock-trade-grid">
+                <div class="stock-side-box">
+                    <h4 class="stock-side-label">Sell</h4>
+                    <div class="stock-input-row">
+                        <input id="sell-price-input" type="number" step="0.01" placeholder="Price" title="Limit price">
+                        <input id="sell-size-input" type="number" min="1" placeholder="Size" title="Size">
+                    </div>
+                    <button type="button" class="stock-trade-btn" onclick="submitStockTrade('sell')">Sell</button>
+                </div>
+                <div class="stock-side-box">
+                    <h4 class="stock-side-label">Buy</h4>
+                    <div class="stock-input-row">
+                        <input id="buy-price-input" type="number" step="0.01" placeholder="Price" title="Limit price">
+                        <input id="buy-size-input" type="number" min="1" placeholder="Size" title="Size">
+                    </div>
+                    <button type="button" class="stock-trade-btn" onclick="submitStockTrade('buy')">Buy</button>
+                </div>
+            </div>
+            <div id="stock-trade-message" class="stock-trade-message"></div>
+        </div>
+
+    </div>
+
+    <div class="action-buttons">
+        <!-- left column -->
+        <button onclick="newBoard()">New Board</button>
+        <button onclick="toggleAnswers()">Toggle Answers</button>
+        <button onclick="toggleDeltas()">Toggle Deltas</button>
+        <button onclick="makeRandomMarket()">Make a Random Market</button>
+        <button onclick="generateRandomOrder()">Generate Random Order</button>
+        <!-- right column -->
+        <button onclick="makeMarket()">Make a Combo Market</button>
+        <button onclick="generateOrder()">Generate Combo Order</button>
+        <button onclick="makeAnyOptionsMarket()">Make an Options Market</button>
+        <button onclick="generateAnyOptionsOrder()">Generate Options Order</button>
+        <button onclick="makeOptionsMarket()">Make an ITM Options Market</button>
+        <button onclick="generateOptionsOrder()">Generate ITM Options Order</button>
+        <button onclick="makeMiddleOptionsMarket()">Make a Middle Options Market</button>
+        <button onclick="generateMiddleOptionOrder()">Generate Middle Option Order</button>
+        <button onclick="generateOtmOrder()">Generate OTM Order</button>
+        <button onclick="lockOptionsQuotes()">Lock Options Quotes</button>
+        <button onclick="generateOpeningOrder()">Generate Opening Order</button>
+        <button onclick="makeRRMarket()">Quote RR</button>
+        <button onclick="makeCSPSMarket()">Quote CS/PS</button>
+        <button onclick="generateSpreadOrder()">Trade Spread</button>
+    </div>
+
+</div>
+
+<!-- ================= MAIN LAYOUT ================= -->
+
+<div class="main-layout">
+
+    <!-- ===== LEFT COLUMN: spread/straddle info ===== -->
+    <div class="main-left">
+        <div class="info-panel">
+            {% for line in info %}
+                <div class="info-line">
+                    <button class="info-toggle-btn" onclick="toggleInfoLine(this)">hide</button>
+                    <span class="info-text">{{ line }}</span>
+                </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- ===== RIGHT COLUMN: board then below-board split ===== -->
+    <div class="main-right">
+
+        <table class="board">
+            <thead>
+                <tr>
+                    <th>Call</th>
+                    <th>Strike</th>
+                    <th>Put</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for strike in strikes %}
+                <tr data-strike="{{ strike }}">
+                    <td class="call {% if highlight.strike == strike and highlight.side == 'call' %}highlight{% endif %}">
+                        <div class="option-cell">
+                            <input type="number" class="option-bid" placeholder="Bid" step="0.01">
+                            <input type="number" class="option-ask" placeholder="Ask" step="0.01">
+                            <span class="option-answer"></span>
+                            <span class="option-delta"></span>
+                        </div>
+                    </td>
+                    <td class="strike">{{ strike }}</td>
+                    <td class="put {% if highlight.strike == strike and highlight.side == 'put' %}highlight{% endif %}">
+                        <div class="option-cell">
+                            <input type="number" class="option-bid" placeholder="Bid" step="0.01">
+                            <input type="number" class="option-ask" placeholder="Ask" step="0.01">
+                            <span class="option-answer"></span>
+                            <span class="option-delta"></span>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <!-- Two columns below the board -->
+        <div class="below-board">
+
+            <!-- tape -->
+            <div class="tape-panel">
+                <div class="tape-header">
+                    <span class="tape-title">Trade Tape</span>
+                    <div class="tape-btn-group">
+                        <button class="tape-fair-btn" onclick="toggleFair()">Show / Hide Stock Fair</button>
+                        <button class="tape-fair-btn" onclick="toggleImpliedStock()">Show / Hide Implied Stock</button>
+                    </div>
+                </div>
+                <div id="fair-panel" class="fair-panel" style="display:none;"></div>
+                <div id="tape-container" class="tape-container"></div>
+            </div>
+
+            <!-- resting orders -->
+            <div class="orders-panel">
+                <div class="orders-panel-title">Resting Orders</div>
+                <div id="orders-container"></div>
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+<!-- ================= MAKE MARKET MODAL ================= -->
+
+<div id="market-modal" class="modal" style="display:none;">
+    <div class="modal-box">
+        <h3 id="market-text"></h3>
+
+        <input id="bid-input" placeholder="Bid">
+        <input id="offer-input" placeholder="Offer">
+
+        <div class="modal-submit-row">
+            <button onclick="submitMarket()">Submit</button>
+            <span id="modal-timer" class="modal-timer"></span>
+        </div>
+    </div>
+</div>
+
+<!-- ================= JAVASCRIPT ================= -->
+
+<script>
+
+/* ================= GLOBAL STATE ================= */
+
+let pendingMarket = null;
+let showImpliedStock = false;
+const stockSize = {{ stock_size }};
+let decisionTime = null;   // null = no constraint
+let audioMode = false;
+let tradeCounter = 0;
+let quoteTime = null;
+let modalTimerInterval = null;
+
+// Registry of resting options orders per cell: option_label → [{side, price, size, orderId}]
+const cellRestingOrders = {};
+// Registry of resting combo orders per strike: strikeKey → [{side, price, size, orderId}]
+const comboRestingOrders = {};
+// Registry of resting spread orders per label: spread_label → [{side, price, size, orderId}]
+const spreadRestingOrders = {};
+let nextOrderId = 0;
+
+// Board strikes injected from server (used by strategy engine)
+const boardStrikes = {{ strikes | tojson }};
+const tickSize = boardStrikes.length >= 2
+    ? Math.round((boardStrikes[1] - boardStrikes[0]) * 100) / 100
+    : 5;
+
+// Strategy companion queue: [{strike, option_type, preferred_side}]
+// Consumed (FIFO) by generateAnyOptionsOrder() and generateRandomOrder().
+let strategyLegs = [];
+
+function isOnBoard(s) {
+    return boardStrikes.some(bs => Math.abs(bs - s) < 0.01);
+}
+
+function toggleAudioMode() {
+    audioMode = !audioMode;
+    document.getElementById("audio-mode-btn").classList.toggle("btn-active", audioMode);
+}
+
+function speakIfEnabled(text) {
+    if (!audioMode || !text) return;
+    fetch("/speak", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text })
+    });
+}
+
+function setDecisionTime() {
+    const val = parseFloat(document.getElementById("decision-time-input").value);
+    const status = document.getElementById("decision-time-status");
+    if (isNaN(val) || val <= 0) {
+        decisionTime = null;
+        status.textContent = "No limit";
+    } else {
+        decisionTime = val;
+        status.textContent = `${val}s`;
+    }
+}
+
+function setQuoteTime() {
+    const val = parseFloat(document.getElementById("quote-time-input").value);
+    const status = document.getElementById("quote-time-status");
+    if (isNaN(val) || val <= 0) {
+        quoteTime = null;
+        status.textContent = "No limit";
+    } else {
+        quoteTime = val;
+        status.textContent = `${val}s per quote`;
+    }
+}
+
+function setStockFair() {
+    const raw    = document.getElementById("stock-fair-input").value.trim();
+    const status = document.getElementById("stock-fair-status");
+    const val    = parseFloat(raw);
+
+    if (raw === "" || isNaN(val)) {
+        // Revert to actual stock fair
+        status.textContent = "Actual fair";
+        // Re-fetch live data so the display reflects the real stock again
+        if (answersVisible) {
+            fetch("/reveal")
+                .then(r => r.json())
+                .then(data => { cachedAnswers = data; showAnswers(); });
+        }
+        if (deltasVisible) {
+            fetch("/reveal_deltas")
+                .then(r => r.json())
+                .then(data => { cachedDeltas = data; showDeltas(); });
+        }
+        return;
+    }
+
+    status.textContent = `S = ${val.toFixed(2)}`;
+
+    fetch(`/reveal_at?stock=${val}`)
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) return;
+            // Override the caches with the custom-stock values
+            cachedAnswers = data.answers;
+            cachedDeltas  = data.deltas;
+            if (answersVisible) showAnswers();
+            if (deltasVisible)  showDeltas();
+        });
+}
+
+function startModalTimer() {
+    if (!quoteTime) return;
+
+    const timerSpan = document.getElementById("modal-timer");
+    const modalBox  = document.querySelector(".modal-box");
+    let remaining = quoteTime;
+    timerSpan.textContent = `${remaining}s`;
+
+    modalTimerInterval = setInterval(() => {
+        remaining -= 1;
+        timerSpan.textContent = `${remaining}s`;
+        if (remaining <= 0) {
+            clearInterval(modalTimerInterval);
+            modalTimerInterval = null;
+            timerSpan.textContent = "Time's up!";
+            modalBox.classList.add("modal-box-flashing");
+        }
+    }, 1000);
+}
+
+function clearModalTimer() {
+    if (modalTimerInterval !== null) {
+        clearInterval(modalTimerInterval);
+        modalTimerInterval = null;
+    }
+    document.getElementById("modal-timer").textContent = "";
+    document.querySelector(".modal-box").classList.remove("modal-box-flashing");
+}
+
+/* ================= BOARD ================= */
+
+let answersVisible = false;
+let cachedAnswers = null;
+let deltasVisible = false;
+let cachedDeltas = null;
+
+function toggleAnswers() {
+    answersVisible = !answersVisible;
+    if (answersVisible) {
+        fetch("/reveal")
+            .then(r => r.json())
+            .then(data => {
+                cachedAnswers = data;
+                showAnswers();
+            });
+    } else {
+        hideAnswers();
+    }
+}
+
+function showAnswers() {
+    document.querySelectorAll("tr[data-strike]").forEach(row => {
+        const strike = row.dataset.strike;
+        if (!cachedAnswers[strike]) return;
+        const callSpan = row.querySelector(".call .option-answer");
+        const putSpan  = row.querySelector(".put  .option-answer");
+        if (callSpan) callSpan.textContent = `(${cachedAnswers[strike].call.toFixed(2)})`;
+        if (putSpan)  putSpan.textContent  = `(${cachedAnswers[strike].put.toFixed(2)})`;
+    });
+}
+
+function hideAnswers() {
+    document.querySelectorAll(".option-answer").forEach(el => el.textContent = "");
+}
+
+function toggleDeltas() {
+    deltasVisible = !deltasVisible;
+    if (deltasVisible) {
+        if (cachedDeltas) {
+            showDeltas();
+        } else {
+            fetch("/reveal_deltas")
+                .then(r => r.json())
+                .then(data => {
+                    cachedDeltas = data;
+                    showDeltas();
+                });
+        }
+    } else {
+        hideDeltas();
+    }
+}
+
+function showDeltas() {
+    document.querySelectorAll("tr[data-strike]").forEach(row => {
+        const strike = row.dataset.strike;
+        if (!cachedDeltas[strike]) return;
+        const callSpan = row.querySelector(".call .option-delta");
+        const putSpan  = row.querySelector(".put  .option-delta");
+        if (callSpan) callSpan.textContent = `[Δ ${cachedDeltas[strike].call.toFixed(2)}]`;
+        if (putSpan)  putSpan.textContent  = `[Δ ${cachedDeltas[strike].put.toFixed(2)}]`;
+    });
+}
+
+function hideDeltas() {
+    document.querySelectorAll(".option-delta").forEach(el => el.textContent = "");
+}
+
+function lockOptionsQuotes() {
+    function processLock(answers) {
+        document.querySelectorAll("tr[data-strike]").forEach(row => {
+            const strike = row.dataset.strike;
+            const answerData = answers[strike];
+            if (!answerData) return;
+
+            ["call", "put"].forEach(side => {
+                const td = row.querySelector(`.${side}`);
+                if (!td) return;
+                const cell = td.querySelector(".option-cell");
+                const bidInput = td.querySelector(".option-bid");
+                const askInput = td.querySelector(".option-ask");
+
+                const bid = parseFloat(bidInput.value);
+                const ask = parseFloat(askInput.value);
+                if (isNaN(bid) || isNaN(ask)) return;
+
+                const fair = answerData[side];
+                const correct = fair >= bid && fair <= ask;
+
+                // Clear any previous lock state
+                td.classList.remove("quote-wrong");
+                const prev = cell.querySelector(".option-locked");
+                if (prev) prev.remove();
+                cell.querySelectorAll(".otm-cell-btn").forEach(b => b.remove());
+                bidInput.style.display = "";
+                askInput.style.display = "";
+
+                if (correct) {
+                    bidInput.style.display = "none";
+                    askInput.style.display = "none";
+                    const lockedSpan = document.createElement("span");
+                    lockedSpan.className = "option-locked";
+                    lockedSpan.textContent = `${bid.toFixed(2)} (${stockSize}x) - ${ask.toFixed(2)} (${stockSize}x)`;
+                    cell.insertBefore(lockedSpan, cell.firstChild);
+                } else {
+                    td.classList.add("quote-wrong");
+                }
+            });
+        });
+    }
+
+    fetch("/reveal")
+        .then(r => r.json())
+        .then(data => {
+            cachedAnswers = data;
+            processLock(cachedAnswers);
+        });
+}
+
+function newBoard() {
+    window.location.href = "/new_board";
+}
+
+function toggleInfoLine(btn) {
+    const textSpan = btn.nextElementSibling;
+    const hidden = textSpan.classList.toggle("info-text-hidden");
+    btn.textContent = hidden ? "show" : "hide";
+}
+
+/* ================= TRADE TAPE ================= */
+
+function addTapeEntry(text, impliedStock) {
+    const container = document.getElementById("tape-container");
+    const entry = document.createElement("div");
+    entry.className = "tape-entry";
+
+    const textSpan = document.createElement("span");
+    textSpan.innerText = text;
+    entry.appendChild(textSpan);
+
+    if (impliedStock != null) {
+        const isSpan = document.createElement("span");
+        isSpan.className = "tape-implied-stock";
+        isSpan.innerText = ` [Implied stock: ${parseFloat(impliedStock).toFixed(2)}]`;
+        isSpan.style.display = showImpliedStock ? "inline" : "none";
+        entry.appendChild(isSpan);
+    }
+
+    container.insertBefore(entry, container.firstChild);
+}
+
+/* ================= SHOW / HIDE IMPLIED STOCK ================= */
+
+function toggleImpliedStock() {
+    showImpliedStock = !showImpliedStock;
+    document.querySelectorAll(".tape-implied-stock").forEach(el => {
+        el.style.display = showImpliedStock ? "inline" : "none";
+    });
+}
+
+/* ================= SHOW / HIDE STOCK FAIR ================= */
+
+function toggleFair() {
+    const panel = document.getElementById("fair-panel");
+    if (panel.style.display === "none") {
+        fetch("/board_params")
+            .then(r => r.json())
+            .then(p => {
+                panel.innerHTML = [
+                    `Stock fair: ${p.stock_fair.toFixed(2)}`,
+                    `Initial fair: ${p.initial_fair.toFixed(2)}`,
+                    `Starting size: ${p.starting_size}`,
+                    `Impact function: ${p.impact_function.toFixed(4)}`,
+                    `Rand factor: ${p.rand_factor.toFixed(4)}`,
+                    `Initial width raw: ${p.start_width_raw.toFixed(6)}`,
+                    `Initial width (rounded): ${p.start_width.toFixed(2)}`,
+                    `r/c: ${p.rc.toFixed(2)}`,
+                    `Initial bid / offer: ${p.initial_bid.toFixed(2)} / ${p.initial_offer.toFixed(2)}`,
+                    `Initial sizes: ${p.starting_size} / ${p.starting_size}`,
+                ].map(l => `<div>${l}</div>`).join("");
+                panel.style.display = "block";
+            });
+    } else {
+        panel.style.display = "none";
+    }
+}
+
+/* ================= ORDER RENDERING ================= */
+
+// True for any options order (ITM, OTM, or middle-strike).
+function isOpt(kind) {
+    return kind === "options" || kind === "middle_options";
+}
+
+function isSpread(kind) {
+    return kind === "spread";
+}
+
+function renderOrder(order) {
+    const container = document.getElementById("orders-container");
+
+    const orderId = (order._orderId !== undefined) ? order._orderId : nextOrderId++;
+
+    // Register orders in the appropriate resting registry
+    if (isSpread(order.order_kind)) {
+        const key   = order.spread_label;
+        const price = parseFloat(order.price ?? order.customer_price);
+        const side  = order.side;
+        if (key && side && !isNaN(price)) {
+            if (!spreadRestingOrders[key]) spreadRestingOrders[key] = [];
+            spreadRestingOrders[key].push({ side, price, size: order.size, orderId });
+        }
+    } else if (!isOpt(order.order_kind)) {
+        const key   = String(order.strike);
+        const price = parseFloat(order.price ?? order.customer_price);
+        const side  = order.side;
+        if (key && side && !isNaN(price)) {
+            if (!comboRestingOrders[key]) comboRestingOrders[key] = [];
+            comboRestingOrders[key].push({ side, price, size: order.size, orderId });
+        }
+    }
+
+    const row = document.createElement("div");
+    row.className = "order-row";
+    row.dataset.orderId = orderId;
+
+    const text = document.createElement("span");
+    text.innerText = audioMode ? `Trade ${++tradeCounter}` : order.sentence;
+
+    const tradeBtn = document.createElement("button");
+    tradeBtn.innerText = "Trade Order";
+
+    // ---- decision-time state ----
+    let intervalId = null;
+
+    function clearTimer() {
+        if (intervalId !== null) {
+            clearInterval(intervalId);
+            intervalId = null;
+        }
+        row.classList.remove("order-row-flashing");
+    }
+
+    tradeBtn.onclick = () => {
+        clearTimer();
+        const prefix = isSpread(order.order_kind) ? "SPREAD" : isOpt(order.order_kind) ? "OPT" : "COMBO";
+        if (order.speak) addTapeEntry(`${prefix}: ` + order.speak, order.implied_stock);
+        if (isOpt(order.order_kind)) {
+            deregisterCellOrder(order);
+        } else if (isSpread(order.order_kind)) {
+            const reg = spreadRestingOrders[order.spread_label];
+            if (reg) { const i = reg.findIndex(o => o.orderId === orderId); if (i !== -1) reg.splice(i, 1); }
+        } else {
+            const reg = comboRestingOrders[String(order.strike)];
+            if (reg) { const i = reg.findIndex(o => o.orderId === orderId); if (i !== -1) reg.splice(i, 1); }
+        }
+        row.remove();
+    };
+
+    row.append(text, tradeBtn);
+
+    // Leave Order button (only when decision time is active)
+    let leaveBtn = null;
+    if (decisionTime !== null) {
+        leaveBtn = document.createElement("button");
+        leaveBtn.innerText = "Leave Order";
+        row.appendChild(leaveBtn);
+    }
+
+    // Speak again button (only shown when audio mode is active)
+    if (order.speak && audioMode) {
+        const speakBtn = document.createElement("button");
+        speakBtn.innerText = "Speak again";
+        speakBtn.onclick = () => speakIfEnabled("resting: " + order.speak);
+        row.appendChild(speakBtn);
+    }
+
+    // Countdown timer (only when decision time is active)
+    if (decisionTime !== null) {
+        const timerSpan = document.createElement("span");
+        timerSpan.className = "order-timer";
+        timerSpan.innerText = "...";   // waiting for speech to finish
+        row.appendChild(timerSpan);
+
+        let remaining = decisionTime;
+        let pollTimeout = null;
+
+        // Also cancel any pending poll when clearing
+        const origClearTimer = clearTimer;
+        function clearTimerFull() {
+            if (pollTimeout !== null) { clearTimeout(pollTimeout); pollTimeout = null; }
+            origClearTimer();
+        }
+        // Patch clearTimer references to use the extended version
+        tradeBtn.onclick = () => {
+            clearTimerFull();
+            const prefix = isSpread(order.order_kind) ? "SPREAD" : isOpt(order.order_kind) ? "OPT" : "COMBO";
+            if (order.speak) addTapeEntry(`${prefix}: ` + order.speak, order.implied_stock);
+            if (isOpt(order.order_kind)) {
+                deregisterCellOrder(order);
+            } else if (isSpread(order.order_kind)) {
+                const reg = spreadRestingOrders[order.spread_label];
+                if (reg) { const i = reg.findIndex(o => o.orderId === orderId); if (i !== -1) reg.splice(i, 1); }
+            } else {
+                const reg = comboRestingOrders[String(order.strike)];
+                if (reg) { const i = reg.findIndex(o => o.orderId === orderId); if (i !== -1) reg.splice(i, 1); }
+            }
+            row.remove();
+        };
+
+        function startCountdown() {
+            timerSpan.innerText = `${remaining}s`;
+            intervalId = setInterval(() => {
+                remaining -= 1;
+                timerSpan.innerText = `${remaining}s`;
+                if (remaining <= 0) {
+                    clearInterval(intervalId);
+                    intervalId = null;
+                    row.classList.add("order-row-flashing");
+                }
+            }, 1000);
+        }
+
+        function pollUntilSpeechDone() {
+            fetch("/speech_status")
+                .then(r => r.json())
+                .then(data => {
+                    if (data.speaking) {
+                        pollTimeout = setTimeout(pollUntilSpeechDone, 200);
+                    } else {
+                        pollTimeout = null;
+                        startCountdown();
+                    }
+                })
+                .catch(() => startCountdown());
+        }
+
+        pollUntilSpeechDone();
+
+        leaveBtn.onclick = () => {
+            clearTimerFull();
+            leaveBtn.remove();
+            timerSpan.remove();
+        };
+    }
+
+    container.appendChild(row);
+}
+
+/* ================= CROSS AVOIDANCE ================= */
+
+// Mutates order.price / order.customer_price (and sentence/speak) if the order
+// would cross an existing resting order for the same instrument.
+// Returns false  – no cross, nothing changed
+//         true   – price was adjusted, proceed normally
+//         "skip" – adjusted price would be ≤ 0, discard the order
+function adjustForCross(order) {
+    const isOptions = isOpt(order.order_kind);
+    const price = parseFloat(order.price ?? order.customer_price);
+    const side  = order.side;
+    if (!side || isNaN(price)) return false;
+
+    const key      = isOptions ? order.option_label
+                   : isSpread(order.order_kind) ? order.spread_label
+                   : String(order.strike);
+    const registry = isOptions ? (cellRestingOrders[key] || [])
+                   : isSpread(order.order_kind) ? (spreadRestingOrders[key] || [])
+                   : (comboRestingOrders[key] || []);
+
+    let newPrice = null;
+    if (side === "bid") {
+        const offers = registry.filter(o => o.side === "offer");
+        if (!offers.length) return false;
+        const bestOffer = Math.min(...offers.map(o => o.price));
+        if (price < bestOffer) return false;               // no cross
+        newPrice = parseFloat((bestOffer - 0.01).toFixed(2));
+    } else {
+        const bids = registry.filter(o => o.side === "bid");
+        if (!bids.length) return false;
+        const bestBid = Math.max(...bids.map(o => o.price));
+        if (price > bestBid) return false;                 // no cross
+        newPrice = parseFloat((bestBid + 0.01).toFixed(2));
+    }
+
+    if (newPrice <= 0) return "skip";
+
+    // Patch price and any text that contains the old price
+    const oldStr = price.toFixed(2);
+    const newStr = newPrice.toFixed(2);
+    if (order.price          !== undefined) order.price          = newPrice;
+    if (order.customer_price !== undefined) order.customer_price = newPrice;
+    if (order.sentence) order.sentence = order.sentence.replace(oldStr, newStr);
+    if (order.speak)    order.speak    = order.speak.replace(oldStr, newStr);
+
+    return true;
+}
+
+/* ================= DUPLICATE-ORDER SUPPRESSION ================= */
+
+// Returns true (suppress) if a resting order already exists for the same
+// instrument on the same side AND the new order does not improve upon it.
+// Suppression is probabilistic (85%) so it is a strong bias, not a hard block.
+function shouldSuppressOrder(order) {
+    const isOptions = isOpt(order.order_kind);
+    const price     = parseFloat(order.price ?? order.customer_price);
+    const side      = order.side;
+    if (!side || isNaN(price)) return false;
+
+    const key      = isOptions ? order.option_label
+                   : isSpread(order.order_kind) ? order.spread_label
+                   : String(order.strike);
+    const registry = isOptions ? (cellRestingOrders[key] || [])
+                   : isSpread(order.order_kind) ? (spreadRestingOrders[key] || [])
+                   : (comboRestingOrders[key] || []);
+    if (!registry.length) return false;
+
+    const sameSide = registry.filter(o => o.side === side);
+    if (!sameSide.length) return false;
+
+    // Allow if the new order improves on the current best
+    if (side === "bid") {
+        const bestBid = Math.max(...sameSide.map(o => o.price));
+        if (price > bestBid) return false;
+    } else {
+        const bestOffer = Math.min(...sameSide.map(o => o.price));
+        if (price < bestOffer) return false;
+    }
+
+    // Non-improving duplicate: suppress with 85% probability
+    return Math.random() < 0.85;
+}
+
+/* ================= GENERATE ORDER ================= */
+
+function generateOrder() {
+    fetch("/generate_order")
+        .then(r => r.json())
+        .then(order => {
+            order._orderId = nextOrderId++;
+            if (adjustForCross(order) === "skip") return;
+            if (shouldSuppressOrder(order)) return;
+            speakIfEnabled("order: " + order.speak);
+            renderOrder(order);
+        });
+}
+
+function generateOptionsOrder() {
+    fetch("/generate_options_order")
+        .then(r => r.json())
+        .then(order => {
+            order._orderId = nextOrderId++;
+            if (adjustForCross(order) === "skip") return;
+            if (shouldSuppressOrder(order)) return;
+            speakIfEnabled("order: " + order.speak);
+            updateBoardCellFromResting(order);
+            renderOrder(order);
+            detectAndEnqueueCompanion(order);
+        });
+}
+
+function clampOtmToExistingBest(order) {
+    // Ensure a new OTM bid is never behind an existing best bid, and a new
+    // OTM offer is never behind an existing best offer.
+    const registry = cellRestingOrders[order.option_label] || [];
+    let clampedPrice = null;
+
+    if (order.side === "bid") {
+        const existing = registry.filter(o => o.side === "bid");
+        if (!existing.length) return;
+        const bestBid = Math.max(...existing.map(o => o.price));
+        if (parseFloat(order.customer_price) >= bestBid) return; // already at or better
+        clampedPrice = bestBid;
+    } else {
+        const existing = registry.filter(o => o.side === "offer");
+        if (!existing.length) return;
+        const bestOffer = Math.min(...existing.map(o => o.price));
+        if (parseFloat(order.customer_price) <= bestOffer) return; // already at or better
+        clampedPrice = bestOffer;
+    }
+
+    const oldStr = parseFloat(order.customer_price).toFixed(2);
+    const newStr = clampedPrice.toFixed(2);
+    order.customer_price = clampedPrice;
+    if (order.sentence) order.sentence = order.sentence.replace(oldStr, newStr);
+    if (order.speak)    order.speak    = order.speak.replace(oldStr, newStr);
+}
+
+function generateOtmOrder() {
+    fetch("/generate_otm_order")
+        .then(r => r.json())
+        .then(order => {
+            order._orderId = nextOrderId++;
+            clampOtmToExistingBest(order);
+            if (adjustForCross(order) === "skip") return;
+            if (shouldSuppressOrder(order)) return;
+            speakIfEnabled("order: " + order.speak);
+            updateBoardCellFromResting(order);
+            renderOrder(order);
+            detectAndEnqueueCompanion(order);
+        });
+}
+
+function generateRandomOrder() {
+    if (strategyLegs.length > 0) { fetchDirectedOptionOrder(strategyLegs.shift()); return; }
+    const r = Math.random();
+    if (r < 1/3) generateOrder();
+    else if (r < 2/3) generateOptionsOrder();
+    else generateMiddleOptionOrder();
+}
+
+
+function makeRandomMarket() {
+    if (strategyLegs.length > 0) { makeDirectedOptionsMarket(strategyLegs.shift()); return; }
+    const r = Math.random();
+    if (r < 1/3) makeMarket();
+    else if (r < 2/3) makeOptionsMarket();
+    else makeMiddleOptionsMarket();
+}
+
+/* ================= STRATEGY ENGINE ================= */
+
+// After an options order rests, detect if it forms leg 1 of a known strategy
+// and probabilistically enqueue the natural companion leg for the next click.
+function detectAndEnqueueCompanion(order) {
+    if (!isOpt(order.order_kind)) return;
+    if (strategyLegs.length > 0) return;       // already have a queued companion
+    if (Math.random() > 0.5) return;            // 50 % chance of strategy follow-up
+
+    const label = order.option_label || "";
+    const parts = label.split(" ");
+    if (parts.length < 2) return;
+    const S       = parseFloat(parts[0]);
+    const optType = parts[1];                   // "call" or "put"
+    const side    = order.side;
+    const t       = tickSize;
+
+    // Companion rules — strategy → (preferred_side, option_type, strike_offset)
+    // Spreads: buy low / sell high (calls); buy high / sell low (puts)
+    // Risk reversals: buy call + sell put (long RR), or sell call + buy put (short RR)
+    let candidates = [];
+
+    if (side === "bid" && optType === "call") {
+        candidates = [
+            { strike: S + t,   option_type: "call", preferred_side: "offer" },  // long call spread (5)
+            { strike: S + 2*t, option_type: "call", preferred_side: "offer" },  // long call spread (10)
+            { strike: S - t,   option_type: "put",  preferred_side: "offer" },  // long RR (5)
+            { strike: S - 2*t, option_type: "put",  preferred_side: "offer" },  // long RR (10)
+        ];
+    } else if (side === "offer" && optType === "call") {
+        candidates = [
+            { strike: S + t,   option_type: "call", preferred_side: "bid" },    // short call spread (5)
+            { strike: S + 2*t, option_type: "call", preferred_side: "bid" },    // short call spread (10)
+            { strike: S - t,   option_type: "put",  preferred_side: "bid" },    // short RR (5)
+            { strike: S - 2*t, option_type: "put",  preferred_side: "bid" },    // short RR (10)
+        ];
+    } else if (side === "bid" && optType === "put") {
+        candidates = [
+            { strike: S - t,   option_type: "put",  preferred_side: "offer" },  // long put spread (5)
+            { strike: S - 2*t, option_type: "put",  preferred_side: "offer" },  // long put spread (10)
+            { strike: S + t,   option_type: "call", preferred_side: "offer" },  // short RR (5)
+            { strike: S + 2*t, option_type: "call", preferred_side: "offer" },  // short RR (10)
+        ];
+    } else if (side === "offer" && optType === "put") {
+        candidates = [
+            { strike: S - t,   option_type: "put",  preferred_side: "bid" },    // short put spread (5)
+            { strike: S - 2*t, option_type: "put",  preferred_side: "bid" },    // short put spread (10)
+            { strike: S + t,   option_type: "call", preferred_side: "bid" },    // long RR (5)
+            { strike: S + 2*t, option_type: "call", preferred_side: "bid" },    // long RR (10)
+        ];
+    }
+
+    const valid = candidates.filter(c => isOnBoard(c.strike));
+    if (!valid.length) return;
+
+    const chosen = valid[Math.floor(Math.random() * valid.length)];
+    strategyLegs.push(chosen);
+}
+
+// Fetch a directed option order from the backend and route it through the
+// standard display pipeline (cross-avoidance, suppression, board update).
+function fetchDirectedOptionOrder(companion) {
+    const url = `/generate_directed_option_order?strike=${companion.strike}`
+              + `&option_type=${companion.option_type}`
+              + `&preferred_side=${companion.preferred_side}`;
+    fetch(url)
+        .then(r => r.json())
+        .then(order => {
+            if (order.error) return;
+            order._orderId = nextOrderId++;
+            if (adjustForCross(order) === "skip") return;
+            if (shouldSuppressOrder(order)) return;
+            speakIfEnabled("order: " + order.speak);
+            updateBoardCellFromResting(order);
+            renderOrder(order);
+            detectAndEnqueueCompanion(order);   // allow chains (3-leg etc.)
+        });
+}
+
+/* ================= ANY OPTIONS (all strikes) ================= */
+
+function makeAnyOptionsMarket() {
+    if (strategyLegs.length > 0) { makeDirectedOptionsMarket(strategyLegs.shift()); return; }
+    // OTM options have no make-market modal flow, so pool is ITM + middle.
+    if (Math.random() < 0.5) makeOptionsMarket();
+    else makeMiddleOptionsMarket();
+}
+
+function generateAnyOptionsOrder() {
+    if (strategyLegs.length > 0) { fetchDirectedOptionOrder(strategyLegs.shift()); return; }
+    const r = Math.random();
+    if (r < 1/3) generateOptionsOrder();
+    else if (r < 2/3) generateOtmOrder();
+    else generateMiddleOptionOrder();
+}
+
+/* ================= MAKE MARKET ================= */
+
+function openMarketModal(order, title) {
+    pendingMarket = order;
+    document.getElementById("market-text").innerText = title;
+    document.getElementById("bid-input").value = "";
+    document.getElementById("offer-input").value = "";
+    document.getElementById("market-modal").style.display = "flex";
+    startModalTimer();
+}
+
+function makeMarket() {
+    fetch("/make_market")
+        .then(r => r.json())
+        .then(order => {
+            order.order_kind = "combo";
+            speakIfEnabled("market: " + order.announce);
+            openMarketModal(order, audioMode ? "" : `${order.size}x ${order.strike} combo`);
+        });
+}
+
+function makeOptionsMarket() {
+    fetch("/make_options_market")
+        .then(r => r.json())
+        .then(order => {
+            speakIfEnabled("market: " + order.announce);
+            openMarketModal(order, audioMode ? "" : `${order.size}x ${order.option_label}`);
+        });
+}
+
+function makeMiddleOptionsMarket() {
+    fetch("/make_middle_options_market")
+        .then(r => r.json())
+        .then(order => {
+            speakIfEnabled("market: " + order.announce);
+            openMarketModal(order, audioMode ? "" : `${order.size}x ${order.option_label}`);
+        });
+}
+
+function makeSpreadMarket() {
+    fetch("/make_spread_market")
+        .then(r => r.json())
+        .then(order => {
+            speakIfEnabled("market: " + order.announce);
+            openMarketModal(order, audioMode ? "" : `${order.size}x ${order.spread_label}`);
+        });
+}
+
+function makeRRMarket() {
+    fetch("/make_rr_market")
+        .then(r => r.json())
+        .then(order => {
+            speakIfEnabled("market: " + order.announce);
+            openMarketModal(order, audioMode ? "" : `${order.size}x ${order.spread_label}`);
+        });
+}
+
+function makeCSPSMarket() {
+    fetch("/make_cs_ps_market")
+        .then(r => r.json())
+        .then(order => {
+            speakIfEnabled("market: " + order.announce);
+            openMarketModal(order, audioMode ? "" : `${order.size}x ${order.spread_label}`);
+        });
+}
+
+function generateSpreadOrder() {
+    fetch("/generate_spread_order")
+        .then(r => r.json())
+        .then(order => {
+            order._orderId = nextOrderId++;
+            if (adjustForCross(order) === "skip") return;
+            if (shouldSuppressOrder(order)) return;
+            speakIfEnabled("order: " + order.speak);
+            renderOrder(order);
+        });
+}
+
+function makeDirectedOptionsMarket(companion) {
+    const url = `/make_directed_options_market?strike=${companion.strike}`
+              + `&option_type=${companion.option_type}`
+              + `&preferred_side=${companion.preferred_side}`;
+    fetch(url)
+        .then(r => r.json())
+        .then(order => {
+            if (order.error) return;
+            speakIfEnabled("market: " + order.announce);
+            openMarketModal(order, audioMode ? "" : `${order.size}x ${order.option_label}`);
+        });
+}
+
+function generateMiddleOptionOrder() {
+    fetch("/generate_middle_option_order")
+        .then(r => r.json())
+        .then(order => {
+            order._orderId = nextOrderId++;
+            if (adjustForCross(order) === "skip") return;
+            if (shouldSuppressOrder(order)) return;
+            speakIfEnabled("order: " + order.speak);
+            updateBoardCellFromResting(order);
+            renderOrder(order);
+            detectAndEnqueueCompanion(order);
+        });
+}
+
+function submitMarket() {
+    clearModalTimer();
+    const bid      = document.getElementById("bid-input").value;
+    const offer    = document.getElementById("offer-input").value;
+    const orderKind = pendingMarket.order_kind;
+    const isOptions = orderKind === "options" || orderKind === "middle_options";
+    const endpoint  = orderKind === "middle_options" ? "/submit_middle_options_market"
+                    : orderKind === "options"        ? "/submit_options_market"
+                    : orderKind === "spread"         ? "/submit_spread_market"
+                    : "/submit_market";
+
+    fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...pendingMarket, bid, offer })
+    })
+    .then(r => r.json())
+    .then(result => {
+        document.getElementById("market-modal").style.display = "none";
+
+        if (result.type === "trade") {
+            updateStock(result.stock);
+            speakIfEnabled("trade: " + result.speak);
+            const sideWord = result.side === "bid" ? "sold" : "bought";
+            if (isOptions) {
+                addTapeEntry(`OPT: Customer ${sideWord} ${result.size}x ${result.option_label} @ ${parseFloat(result.price).toFixed(2)}`, result.implied_stock);
+            } else if (isSpread(result.order_kind) || result.spread_label) {
+                addTapeEntry(`SPREAD: Customer ${sideWord} ${result.size}x ${result.spread_label} @ ${parseFloat(result.price).toFixed(2)}`, result.implied_stock);
+            } else {
+                addTapeEntry(`COMBO: Customer ${sideWord} ${result.size}x ${result.strike} combo @ ${parseFloat(result.price).toFixed(2)}`, result.implied_stock);
+            }
+            return;
+        }
+
+        result._orderId = nextOrderId++;
+        if (adjustForCross(result) === "skip") return;
+        speakIfEnabled("resting: " + result.speak);
+        if (isOptions) updateBoardCellFromResting(result);
+        renderOrder(result);
+        if (isOptions) detectAndEnqueueCompanion(result);
+    });
+}
+
+/* ================= UPDATE BOARD CELL FROM RESTING ORDER ================= */
+
+function updateBoardCellFromResting(order) {
+    const label = order.option_label;
+    if (!label) return;
+    const price = parseFloat(order.price ?? order.customer_price);
+    const side  = order.side;
+    const size  = order.size;
+    if (!side || isNaN(price) || !size) return;
+
+    if (!cellRestingOrders[label]) cellRestingOrders[label] = [];
+    cellRestingOrders[label].push({ side, price, size, orderId: order._orderId });
+    refreshCellFromOrders(label);
+}
+
+function deregisterCellOrder(order) {
+    const label = order.option_label;
+    if (!label || !cellRestingOrders[label]) return;
+    const price = parseFloat(order.price ?? order.customer_price);
+    const idx = cellRestingOrders[label].findIndex(
+        o => o.side === order.side && Math.abs(o.price - price) < 0.001 && o.size === order.size
+    );
+    if (idx !== -1) cellRestingOrders[label].splice(idx, 1);
+    refreshCellFromOrders(label);
+}
+
+function refreshCellFromOrders(label) {
+    const parts = (label || "").split(" ");
+    if (parts.length < 2) return;
+    const strikeNum = parseFloat(parts[0]);
+    const optSide   = parts[1];
+
+    let targetRow = null;
+    document.querySelectorAll("tr[data-strike]").forEach(row => {
+        if (parseFloat(row.dataset.strike) === strikeNum) targetRow = row;
+    });
+    if (!targetRow) return;
+
+    const td = targetRow.querySelector(`.${optSide}`);
+    if (!td) return;
+
+    const remaining = cellRestingOrders[label] || [];
+    const bids      = remaining.filter(o => o.side === "bid");
+    const offers    = remaining.filter(o => o.side === "offer");
+    const bestBid   = bids.length   ? bids.reduce((b, o)   => o.price > b.price ? o : b)   : null;
+    const bestOffer = offers.length ? offers.reduce((b, o) => o.price < b.price ? o : b) : null;
+
+    const lockedSpan = td.querySelector(".option-locked");
+
+    if (lockedSpan) {
+        if (!lockedSpan.dataset.originalText) {
+            lockedSpan.dataset.originalText = lockedSpan.textContent;
+        }
+        const spanParts = lockedSpan.dataset.originalText.split(" - ");
+        if (spanParts.length < 2) return;
+
+        const bidHtml = bestBid
+            ? `<strong>${bestBid.price.toFixed(2)} (${bestBid.size}x)</strong>`
+            : spanParts[0];
+        const askHtml = bestOffer
+            ? `<strong>${bestOffer.price.toFixed(2)} (${bestOffer.size}x)</strong>`
+            : spanParts[1];
+
+        td.dataset.customerBid = bestBid   ? bestBid.price   : "";
+        td.dataset.customerAsk = bestOffer ? bestOffer.price : "";
+        td.dataset.bidHtml = bidHtml;
+        td.dataset.askHtml = askHtml;
+        lockedSpan.innerHTML = `${bidHtml} - ${askHtml}`;
+
+    } else {
+        const bidInput = td.querySelector(".option-bid");
+        const askInput = td.querySelector(".option-ask");
+
+        if (bestBid) {
+            const cur = parseFloat(bidInput.value);
+            if (isNaN(cur) || bestBid.price > cur) {
+                td.dataset.customerBid = bestBid.price;
+                bidInput.value = bestBid.price.toFixed(2);
+            }
+        }
+        if (bestOffer) {
+            const cur = parseFloat(askInput.value);
+            if (isNaN(cur) || bestOffer.price < cur) {
+                td.dataset.customerAsk = bestOffer.price;
+                askInput.value = bestOffer.price.toFixed(2);
+            }
+        }
+    }
+}
+
+/* ================= STOCK TRADING ================= */
+
+function submitStockTrade(side) {
+    const sizeInputId = side === "buy" ? "buy-size-input" : "sell-size-input";
+    const priceInputId = side === "buy" ? "buy-price-input" : "sell-price-input";
+    const rawSize = parseFloat(document.getElementById(sizeInputId).value);
+    const size = rawSize / 100;
+    const price = document.getElementById(priceInputId).value;
+
+    fetch("/trade_stock", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ side, size, price })
+    })
+    .then(r => r.json())
+    .then(result => {
+        if (result.stock) {
+            updateStock(result.stock);
+        }
+        const msg = result.message || "Stock order submitted";
+        showStockMessage(msg);
+        if (result.ok && result.traded > 0) {
+            addTapeEntry("STOCK: " + msg);
+        }
+    })
+    .catch(() => showStockMessage("Stock order failed"));
+}
+
+function showStockMessage(message) {
+    document.getElementById("stock-trade-message").innerText = message;
+}
+
+function updateStock(stock) {
+    document.getElementById("stock-bid").innerText = stock.bid;
+    document.getElementById("stock-offer").innerText = stock.offer;
+    document.getElementById("stock-bid-size").innerText = stock.bid_size + "x";
+    document.getElementById("stock-offer-size").innerText = stock.offer_size + "x";
+}
+
+/* ================= OPENING ORDER ================= */
+
+function generateOpeningOrder() {
+    fetch("/generate_opening_order")
+        .then(r => r.json())
+        .then(order => {
+            order._orderId = nextOrderId++;
+            speakIfEnabled("order: " + order.speak);
+            if (isOpt(order.order_kind)) updateBoardCellFromResting(order);
+            renderOrder(order);
+        });
+}
+
+</script>
+
+</body>
+</html>
