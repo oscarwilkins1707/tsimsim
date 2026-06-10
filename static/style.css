@@ -7,7 +7,7 @@ body {
 
 .page-header {
     display: grid;
-    grid-template-columns: 200px 1fr auto;
+    grid-template-columns: 160px auto;
     gap: 0 24px;
     align-items: start;
     margin-bottom: 14px;
@@ -123,8 +123,8 @@ body {
 
 .action-buttons button {
     margin: 0;
-    padding: 7px 14px;
-    font-size: 13px;
+    padding: 4px 8px;
+    font-size: 11px;
     cursor: pointer;
     display: block;
     white-space: nowrap;
@@ -211,12 +211,34 @@ body {
     line-height: 1.3;
 }
 
+/* ===== OUTER WRAPPER: left content | right ladder ===== */
+
+.outer-wrapper {
+    display: flex;
+    gap: 20px;
+    align-items: flex-start;
+}
+
+.left-content {
+    flex: 1;
+    min-width: 0;
+}
+
+.right-ladder {
+    flex-shrink: 0;
+    width: 640px;
+    position: sticky;
+    top: 20px;
+    max-height: calc(100vh - 40px);
+    overflow-y: auto;
+}
+
 /* ===== MAIN LAYOUT: info left | board+below right ===== */
 
 .main-layout {
     display: grid;
-    grid-template-columns: 200px 1fr;
-    gap: 0 24px;
+    grid-template-columns: 160px 1fr;
+    gap: 0 20px;
     align-items: start;
 }
 
@@ -254,6 +276,128 @@ body {
     visibility: hidden;
 }
 
+/* ===== STOCK LADDER ===== */
+
+.ladder-panel {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.ladder-config {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 6px;
+}
+
+.ladder-config-label {
+    font-size: 12px;
+    font-weight: bold;
+    color: #444;
+}
+
+.ladder-size-input {
+    width: 72px;
+    padding: 3px 5px;
+    font-size: 12px;
+    box-sizing: border-box;
+    -moz-appearance: textfield;
+}
+
+.ladder-size-input::-webkit-outer-spin-button,
+.ladder-size-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.ladder-scroll {
+    border: 1px solid #ccc;
+    border-radius: 3px;
+}
+
+.stock-ladder {
+    border-collapse: collapse;
+    font-size: 13px;
+    width: 100%;
+    table-layout: fixed;
+}
+
+.stock-ladder thead th {
+    position: sticky;
+    top: 0;
+    background: #e8e8e8;
+    border: 1px solid #bbb;
+    padding: 3px 4px;
+    font-size: 11px;
+    font-weight: bold;
+    text-align: center;
+    z-index: 1;
+}
+
+.stock-ladder td {
+    padding: 1px 4px;
+    border-bottom: 1px solid #eee;
+    height: 20px;
+    line-height: 20px;
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+/* Row backgrounds — unified alternating pattern across all row types */
+.stock-ladder tbody tr:nth-child(odd)  { background: #ffffff; }
+.stock-ladder tbody tr:nth-child(even) { background: #e8f5e8; }
+.stock-ladder tr.ladder-mid            { background: #fffacd !important; }
+
+/* Column widths (7 columns, total ~600px) */
+.lh-filled, .lc-filled-buy,  .lc-filled-sell { width: 84px; }
+.lh-you,    .lc-you-buy,     .lc-you-sell    { width: 84px; }
+.lh-bid,    .lc-bid                          { width: 90px; }
+.lh-price,  .lc-price                        { width: 84px; }
+.lh-offer,  .lc-offer                        { width: 90px; }
+
+/* Text alignment and colours */
+.lc-filled-buy  { text-align: right;  color: #1a44bb; font-weight: bold; }
+.lc-you-buy     { text-align: right;  color: #000;    cursor: pointer;   }
+.lc-bid         { text-align: right;  color: #000;    }
+.lc-price       { text-align: right;  font-weight: normal; color: #222; padding-right: 6px; }
+.lc-mid         { color: #666;        font-weight: bold; }
+.lc-offer       { text-align: left;   color: #000;    }
+.lc-you-sell    { text-align: left;   color: #000;    cursor: pointer;   }
+.lc-filled-sell { text-align: left;   color: #bb2222; font-weight: bold; }
+
+/* Hover highlight on clickable "you" cells */
+.lc-you-buy:hover,
+.lc-you-sell:hover {
+    background: #ffff99 !important;
+    cursor: pointer;
+}
+
+.ladder-cancel-btn {
+    padding: 3px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    margin: 0;
+    background: #fff0f0;
+    border: 1px solid #d9a0a0;
+    border-radius: 3px;
+    color: #8b0000;
+    white-space: nowrap;
+}
+
+.ladder-cancel-btn:hover {
+    background: #ffd5d5;
+    border-color: #c06060;
+}
+
+.ladder-message {
+    margin-top: 4px;
+    font-size: 11px;
+    color: #333;
+    min-height: 14px;
+    line-height: 1.4;
+}
+
 /* ===== OPTIONS BOARD ===== */
 
 .main-right {
@@ -269,7 +413,7 @@ body {
 
 .board th, .board td {
     border: 1px solid #ccc;
-    padding: 6px 8px;
+    padding: 3px 2px;
 }
 
 .board th {
@@ -279,14 +423,14 @@ body {
 .option-cell {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 2px;
 }
 
 .option-bid,
 .option-ask {
-    width: 54px;
-    padding: 3px 4px;
-    font-size: 12px;
+    width: 30px;
+    padding: 2px 1px;
+    font-size: 11px;
     box-sizing: border-box;
     /* hide the browser number spinner arrows */
     -moz-appearance: textfield;
@@ -301,7 +445,7 @@ body {
 }
 
 .option-answer {
-    font-size: 12px;
+    font-size: 10px;
     color: #555;
     white-space: nowrap;
     min-width: 0;

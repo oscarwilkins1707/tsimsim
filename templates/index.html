@@ -7,6 +7,9 @@
 
 <body>
 
+<div class="outer-wrapper">
+<div class="left-content">
+
 <!-- ================= HEADER (quote + stock panel | buttons) ================= -->
 
 <div class="page-header">
@@ -31,48 +34,6 @@
             <button class="decision-time-btn" onclick="setStockFair()">Set</button>
         </div>
         <div id="stock-fair-status" class="decision-time-status">Actual fair</div>
-    </div>
-
-    <div class="header-center">
-
-        <div class="stock-quote-group">
-            <div class="stock-quote">
-                <div class="prices">
-                    <span id="stock-bid">{{ stock_spread.bid }}</span>
-                    -
-                    <span id="stock-offer">{{ stock_spread.offer }}</span>
-                </div>
-                <div class="sizes">
-                    <span id="stock-bid-size">{{ stock_spread.bid_size }}x</span>
-                    <span id="stock-offer-size">{{ stock_spread.offer_size }}x</span>
-                </div>
-            </div>
-            <div class="rc">{{ rc }}</div>
-        </div>
-
-        <div class="stock-trade-panel">
-            <h3 class="stock-trade-title">Stock</h3>
-            <div class="stock-trade-grid">
-                <div class="stock-side-box">
-                    <h4 class="stock-side-label">Sell</h4>
-                    <div class="stock-input-row">
-                        <input id="sell-price-input" type="number" step="0.01" placeholder="Price" title="Limit price">
-                        <input id="sell-size-input" type="number" min="1" placeholder="Size" title="Size">
-                    </div>
-                    <button type="button" class="stock-trade-btn" onclick="submitStockTrade('sell')">Sell</button>
-                </div>
-                <div class="stock-side-box">
-                    <h4 class="stock-side-label">Buy</h4>
-                    <div class="stock-input-row">
-                        <input id="buy-price-input" type="number" step="0.01" placeholder="Price" title="Limit price">
-                        <input id="buy-size-input" type="number" min="1" placeholder="Size" title="Size">
-                    </div>
-                    <button type="button" class="stock-trade-btn" onclick="submitStockTrade('buy')">Buy</button>
-                </div>
-            </div>
-            <div id="stock-trade-message" class="stock-trade-message"></div>
-        </div>
-
     </div>
 
     <div class="action-buttons">
@@ -108,6 +69,10 @@
     <!-- ===== LEFT COLUMN: spread/straddle info ===== -->
     <div class="main-left">
         <div class="info-panel">
+            <div class="info-line">
+                <button class="info-toggle-btn" onclick="toggleInfoLine(this)">hide</button>
+                <span class="info-text">{{ rc }}</span>
+            </div>
             {% for line in info %}
                 <div class="info-line">
                     <button class="info-toggle-btn" onclick="toggleInfoLine(this)">hide</button>
@@ -179,7 +144,39 @@
 
     </div>
 
-</div>
+</div><!-- end main-layout -->
+</div><!-- end left-content -->
+
+<!-- ================= STOCK LADDER (right sidebar) ================= -->
+
+<div class="right-ladder">
+    <div class="ladder-panel">
+        <div class="ladder-config">
+            <label class="ladder-config-label">Size</label>
+            <input id="ladder-order-size" type="number" value="1000" min="100" step="100" class="ladder-size-input">
+            <button class="ladder-cancel-btn" onclick="cancelAllLadderOrders()">Cancel Orders</button>
+        </div>
+        <div class="ladder-scroll">
+            <table class="stock-ladder">
+                <thead>
+                    <tr>
+                        <th class="lh-filled">filled</th>
+                        <th class="lh-you">you</th>
+                        <th class="lh-bid">bid</th>
+                        <th class="lh-price">price</th>
+                        <th class="lh-offer">offer</th>
+                        <th class="lh-you">you</th>
+                        <th class="lh-filled">filled</th>
+                    </tr>
+                </thead>
+                <tbody id="ladder-body"></tbody>
+            </table>
+        </div>
+        <div id="ladder-message" class="ladder-message"></div>
+    </div>
+</div><!-- end right-ladder -->
+
+</div><!-- end outer-wrapper -->
 
 <!-- ================= MAKE MARKET MODAL ================= -->
 
@@ -1223,12 +1220,109 @@ function showStockMessage(message) {
     document.getElementById("stock-trade-message").innerText = message;
 }
 
-function updateStock(stock) {
-    document.getElementById("stock-bid").innerText = stock.bid;
-    document.getElementById("stock-offer").innerText = stock.offer;
-    document.getElementById("stock-bid-size").innerText = stock.bid_size + "x";
-    document.getElementById("stock-offer-size").innerText = stock.offer_size + "x";
+function updateStock(/* stock */) {
+    fetchLadder();
 }
+
+/* ================= STOCK LADDER ================= */
+
+let ladderMsgTimer = null;
+
+function fetchLadder() {
+    fetch("/get_ladder")
+        .then(r => r.json())
+        .then(renderLadder)
+        .catch(() => {});
+}
+
+function renderLadder(data) {
+    const tbody = document.getElementById("ladder-body");
+    if (!tbody) return;
+    tbody.innerHTML = "";
+
+    data.rows.forEach(row => {
+        const tr = document.createElement("tr");
+
+        if (row.is_mid) {
+            tr.className = "ladder-mid";
+        } else if (row.side === "offer") {
+            tr.className = "ladder-offer-row";
+        } else if (row.side === "bid") {
+            tr.className = "ladder-bid-row";
+        } else {
+            tr.className = "ladder-spread-row";
+        }
+
+        const priceStr   = parseFloat(row.price).toFixed(2);
+        const filledBuy  = row.filled_buy  != null ? row.filled_buy.toLocaleString()  : "";
+        const filledSell = row.filled_sell != null ? row.filled_sell.toLocaleString() : "";
+        const youBuy     = row.you_buy     != null ? row.you_buy.toLocaleString()     : "";
+        const youSell    = row.you_sell    != null ? row.you_sell.toLocaleString()    : "";
+        const bid        = row.bid         != null ? row.bid.toLocaleString()         : "";
+        const offer      = row.offer       != null ? row.offer.toLocaleString()       : "";
+
+        tr.innerHTML =
+            `<td class="lc-filled-buy">${filledBuy}</td>` +
+            `<td class="lc-you-buy" data-price="${row.price}">${youBuy}</td>` +
+            `<td class="lc-bid">${bid}</td>` +
+            `<td class="lc-price${row.is_mid ? " lc-mid" : ""}">${priceStr}</td>` +
+            `<td class="lc-offer">${offer}</td>` +
+            `<td class="lc-you-sell" data-price="${row.price}">${youSell}</td>` +
+            `<td class="lc-filled-sell">${filledSell}</td>`;
+
+        tbody.appendChild(tr);
+    });
+
+    tbody.querySelectorAll(".lc-you-buy").forEach(cell => {
+        cell.addEventListener("dblclick", function () {
+            placeLadderOrder("buy", parseFloat(this.dataset.price));
+        });
+    });
+    tbody.querySelectorAll(".lc-you-sell").forEach(cell => {
+        cell.addEventListener("dblclick", function () {
+            placeLadderOrder("sell", parseFloat(this.dataset.price));
+        });
+    });
+}
+
+function placeLadderOrder(side, price) {
+    const qty = parseInt(document.getElementById("ladder-order-size").value) || 1000;
+    fetch("/place_ladder_order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ side, price, qty })
+    })
+    .then(r => r.json())
+    .then(result => {
+        showLadderMessage(result.message || "Order placed");
+        if (result.ok && result.filled > 0) {
+            addTapeEntry("STOCK: " + result.message);
+        }
+        fetchLadder();
+    })
+    .catch(() => showLadderMessage("Order failed"));
+}
+
+function cancelAllLadderOrders() {
+    fetch("/cancel_ladder_orders", { method: "POST" })
+        .then(r => r.json())
+        .then(result => {
+            showLadderMessage(result.message);
+            fetchLadder();
+        })
+        .catch(() => showLadderMessage("Cancel failed"));
+}
+
+function showLadderMessage(msg) {
+    const el = document.getElementById("ladder-message");
+    if (!el) return;
+    el.textContent = msg;
+    if (ladderMsgTimer) clearTimeout(ladderMsgTimer);
+    ladderMsgTimer = setTimeout(() => { el.textContent = ""; }, 5000);
+}
+
+fetchLadder();
+setInterval(fetchLadder, 1000);
 
 /* ================= OPENING ORDER ================= */
 

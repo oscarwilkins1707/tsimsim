@@ -8,9 +8,12 @@ from flask import request
 import pyttsx3
 import threading
 import queue
+import time
 import pythoncom
 
 speech_active = False
+_board_lock = threading.Lock()
+
 
 def speech_worker():
     global speech_active
@@ -159,12 +162,20 @@ def generate_opening_board():
     first_info = f"{K} straddle: {atm_straddle}"
 
     stock_size = random.choice([20,30,30,50,50,75,100,150])
-    impact_function = round(float(np.random.uniform(0.01, 0.05) * 0.8), 4)
+    impact_function = round(float(np.random.uniform(0.005, 0.025) * 0.8), 4)
     rand_factor = float(np.random.uniform(0.5, 1.5))
-    start_width_raw = impact_function * rand_factor + float(np.random.choice([0.03, 0.05, 0.07]))
-    start_width = max(round(round(start_width_raw / MIN_TICK) * MIN_TICK, 2), 0.04)
-    bid = round(S - start_width, 2)
-    offer = round(S + start_width, 2)
+
+    # Spread: 1-6 cents wide, weighted toward tighter
+    full_spread_ticks = random.choices(
+        [1, 2, 3, 4, 5, 6],
+        weights=[10, 30, 25, 18, 12, 5]
+    )[0]
+    spread = full_spread_ticks * MIN_TICK
+    half_spread = spread / 2.0
+    bid   = round_to_cent(S - math.floor(full_spread_ticks / 2) * MIN_TICK)
+    offer = round_to_cent(bid + spread)
+    start_width     = half_spread
+    start_width_raw = half_spread
     board = {
         "strikes": sorted(strikes),
         "stock_size": stock_size,
@@ -239,11 +250,326 @@ def generate_opening_board():
         },
     }
 
+    board["ladder_levels"] = generate_ladder_levels(bid, offer)
+    board["best_bid"]      = bid
+    board["best_offer"]    = offer
+
+    # ── Market dynamics (randomised per board, fixed for its lifetime) ──────
+    tick_vol    = float(np.random.uniform(0.15, 1.0))   # random-walk speed (ticks/√s)
+    drift_alpha = float(np.random.uniform(0.02, 0.15))  # drift mean-reversion rate
+    drift_sigma = float(np.random.uniform(0.01, 0.06))  # drift innovation noise (ticks/s per √s)
+    drift_std   = drift_sigma / max(math.sqrt(2 * drift_alpha), 1e-9)
+    board["dynamics"] = {
+        "fair_mid":    (bid + offer) / 2.0,
+        "drift":       float(np.random.normal(0, drift_std)),
+        "tick_vol":    tick_vol,
+        "drift_alpha": drift_alpha,
+        "drift_sigma": drift_sigma,
+        "half_spread": half_spread,
+        "enabled":     True,
+        "last_update": None,
+    }
+
     return board
 
 
 def round_to_cent(value):
     return round(round(value / MIN_TICK) * MIN_TICK, 2)
+
+
+# ─── Stock ladder helpers ──────────────────────────────────────────────────────
+
+def _sparse_level_size():
+    """Sparse order-book size: ~35 % empty, rest lognormal-large."""
+    if random.random() < 0.35:
+        return 0
+    size = max(200, int(round(float(np.random.lognormal(mean=7.0, sigma=0.6)) / 100) * 100))
+    return min(size, 15000)
+
+
+def _empty_level():
+    return {"market_bid": 0, "market_offer": 0,
+            "user_buy": 0, "user_sell": 0, "filled_buy": 0, "filled_sell": 0}
+
+
+def generate_ladder_levels(best_bid, best_offer, n_levels=30):
+    """Generate sparse fake liquidity for the stock order-book ladder."""
+    levels = {}
+    for i in range(n_levels):
+        bid_price = round_to_cent(best_bid - i * MIN_TICK)
+        lvl = _empty_level()
+        lvl["market_bid"] = _sparse_level_size()
+        levels[bid_price] = lvl
+
+        offer_price = round_to_cent(best_offer + i * MIN_TICK)
+        if offer_price not in levels:
+            lvl = _empty_level()
+            lvl["market_offer"] = _sparse_level_size()
+            levels[offer_price] = lvl
+
+    return levels
+
+
+def _update_ladder_best_prices(board):
+    """Recalculate best_bid / best_offer from the current ladder state."""
+    levels = board["ladder_levels"]
+    offer_levels = [p for p, d in levels.items() if d["market_offer"] + d["user_sell"] > 0]
+    bid_levels   = [p for p, d in levels.items() if d["market_bid"]  + d["user_buy"]  > 0]
+    if offer_levels:
+        board["best_offer"] = min(offer_levels)
+    if bid_levels:
+        board["best_bid"] = max(bid_levels)
+    board["stock_spread"]["bid"]   = board["best_bid"]
+    board["stock_spread"]["offer"] = board["best_offer"]
+
+
+def execute_ladder_order(board, side, qty, limit):
+    """Execute a limit order against the ladder book."""
+    levels    = board["ladder_levels"]
+    remaining = qty
+    fills     = []
+
+    if side == "buy":
+        while remaining > 0:
+            offer_with_vol = [p for p, d in levels.items() if d["market_offer"] > 0]
+            if not offer_with_vol:
+                break
+            best_p = min(offer_with_vol)
+            if best_p > limit:
+                break
+            available = levels[best_p]["market_offer"]
+            fill = min(remaining, available)
+            levels[best_p]["market_offer"] -= fill
+            levels[best_p]["filled_buy"]   += fill
+            remaining -= fill
+            fills.append({"price": best_p, "qty": fill})
+
+        if remaining > 0:
+            p = round_to_cent(limit)
+            if p not in levels:
+                levels[p] = {
+                    "market_bid": 0, "market_offer": 0,
+                    "user_buy": 0, "user_sell": 0,
+                    "filled_buy": 0, "filled_sell": 0,
+                }
+            levels[p]["user_buy"] += remaining
+
+    elif side == "sell":
+        while remaining > 0:
+            bids_with_vol = [p for p, d in levels.items() if d["market_bid"] > 0]
+            if not bids_with_vol:
+                break
+            best_p = max(bids_with_vol)
+            if best_p < limit:
+                break
+            available = levels[best_p]["market_bid"]
+            fill = min(remaining, available)
+            levels[best_p]["market_bid"]    -= fill
+            levels[best_p]["filled_sell"]   += fill
+            remaining -= fill
+            fills.append({"price": best_p, "qty": fill})
+
+        if remaining > 0:
+            p = round_to_cent(limit)
+            if p not in levels:
+                levels[p] = {
+                    "market_bid": 0, "market_offer": 0,
+                    "user_buy": 0, "user_sell": 0,
+                    "filled_buy": 0, "filled_sell": 0,
+                }
+            levels[p]["user_sell"] += remaining
+
+    else:
+        return {"ok": False, "message": "Unknown side"}
+
+    _update_ladder_best_prices(board)
+
+    total_filled = sum(f["qty"] for f in fills)
+
+    # ── User-trade market impact ───────────────────────────────────────────────
+    # Buying stock pushes fair_mid (the quoted ladder center) up; selling pushes
+    # it down.  This is the price-discovery mechanism: trading in the correct
+    # direction relative to the hidden fair (stock_num) closes the gap opened by
+    # options/combo flow.  Magnitude mirrors the options impact formula.
+    if total_filled > 0:
+        dyn = board.get("dynamics")
+        if dyn:
+            impact = (total_filled / board["stock_size"]) * board["impact_function"] * 0.5
+            dyn["fair_mid"] += impact if side == "buy" else -impact
+
+    if total_filled > 0:
+        avg_price = round(sum(f["price"] * f["qty"] for f in fills) / total_filled, 4)
+        verb = "Bought" if side == "buy" else "Sold"
+        msg  = f"{verb} {total_filled:,} @ {avg_price:.2f}"
+        if remaining > 0:
+            msg += f", {remaining:,} resting @ {limit:.2f}"
+    elif remaining > 0:
+        action = "Buy" if side == "buy" else "Sell"
+        msg = f"{action} {remaining:,} resting @ {limit:.2f}"
+    else:
+        msg = "No fill"
+
+    return {
+        "ok":     True,
+        "fills":  fills,
+        "filled": total_filled,
+        "remaining": remaining,
+        "message": msg,
+    }
+
+
+# ─── Dynamic market ────────────────────────────────────────────────────────────
+
+def _apply_market_update(board):
+    """Advance the simulated market by one time-step (called by background worker)."""
+    dyn = board.get("dynamics")
+    if not dyn or not dyn.get("enabled", True):
+        return
+
+    now = time.time()
+    if dyn["last_update"] is None:
+        dyn["last_update"] = now
+        return
+
+    dt = min(now - dyn["last_update"], 2.0)   # cap: don't blow up after a long pause
+    dyn["last_update"] = now
+    if dt <= 0:
+        return
+
+    # ── Update drift (OU process, mean-reverts to 0) ──────────────────────────
+    dyn["drift"] += (
+        -dyn["drift_alpha"] * dyn["drift"] * dt
+        + float(np.random.normal(0, dyn["drift_sigma"] * math.sqrt(dt)))
+    )
+
+    # ── Advance both quoted price and hidden fair by the same random step ────
+    # This keeps them in sync during normal drift while allowing options impact
+    # (which moves stock_num only) to create a persistent gap that the user
+    # must close by trading stock.
+    drift_delta = (
+        dyn["drift"] * MIN_TICK * dt
+        + float(np.random.normal(0, dyn["tick_vol"] * MIN_TICK * math.sqrt(dt)))
+    )
+    dyn["fair_mid"]    += drift_delta
+    board["stock_num"] += drift_delta
+
+    # Slow automatic convergence of the quoted price toward the hidden fair.
+    # Without user stock trading the gap closes in roughly 60–90 s, giving the
+    # user time to act but preventing permanent divergence.
+    gap = board["stock_num"] - dyn["fair_mid"]
+    dyn["fair_mid"] += gap * 0.01 * dt
+
+    new_fair      = dyn["fair_mid"]
+    half_spread   = dyn["half_spread"]
+    new_best_bid  = round_to_cent(new_fair - math.floor(half_spread / MIN_TICK + 0.5) * MIN_TICK)
+    new_best_offer = round_to_cent(new_best_bid + round(half_spread * 2 / MIN_TICK) * MIN_TICK)
+
+    old_best_bid   = board["best_bid"]
+    old_best_offer = board["best_offer"]
+
+    if new_best_bid == old_best_bid and new_best_offer == old_best_offer:
+        return   # price hasn't moved a full tick yet
+
+    levels = board["ladder_levels"]
+
+    # ── Clear market quotes on levels that fell into the spread gap ───────────
+    for price, data in levels.items():
+        if new_best_bid < price < new_best_offer:
+            data["market_bid"]   = 0
+            data["market_offer"] = 0
+
+    # ── Ensure inside bid has volume ──────────────────────────────────────────
+    if new_best_bid not in levels:
+        lvl = _empty_level()
+        lvl["market_bid"] = _sparse_level_size() or 300
+        levels[new_best_bid] = lvl
+    elif levels[new_best_bid]["market_bid"] == 0:
+        levels[new_best_bid]["market_bid"] = _sparse_level_size() or 300
+
+    # ── Ensure inside offer has volume ────────────────────────────────────────
+    if new_best_offer not in levels:
+        lvl = _empty_level()
+        lvl["market_offer"] = _sparse_level_size() or 300
+        levels[new_best_offer] = lvl
+    elif levels[new_best_offer]["market_offer"] == 0:
+        levels[new_best_offer]["market_offer"] = _sparse_level_size() or 300
+
+    # ── Generate any new outer levels as the book shifts ─────────────────────
+    N_LEVELS = 30
+    for i in range(N_LEVELS):
+        bp = round_to_cent(new_best_bid  - i * MIN_TICK)
+        if bp not in levels:
+            lvl = _empty_level()
+            lvl["market_bid"] = _sparse_level_size()
+            levels[bp] = lvl
+        op = round_to_cent(new_best_offer + i * MIN_TICK)
+        if op not in levels:
+            lvl = _empty_level()
+            lvl["market_offer"] = _sparse_level_size()
+            levels[op] = lvl
+
+    # ── Fill user resting orders crossed by the move (silent fill) ───────────
+    # Market moved DOWN (offer fell) → user buys at or above new offer get hit
+    # Market moved UP   (bid rose)   → user sells at or below new bid  get hit
+    for price, data in list(levels.items()):
+        if data["user_buy"] > 0 and price >= new_best_offer:
+            fill_qty = data["user_buy"]
+            levels[price]["market_offer"] = max(0, levels[price]["market_offer"] - fill_qty)
+            data["filled_buy"] += fill_qty
+            data["user_buy"]    = 0
+
+        if data["user_sell"] > 0 and price <= new_best_bid:
+            fill_qty = data["user_sell"]
+            levels[price]["market_bid"] = max(0, levels[price]["market_bid"] - fill_qty)
+            data["filled_sell"] += fill_qty
+            data["user_sell"]   = 0
+
+    # ── Adverse selection: pick off resting orders that are bad to the hidden fair
+    # Informed algos know the true fair is board["stock_num"], not the quoted
+    # ladder center (fair_mid).  A resting buy above stock_num, or a sell below
+    # stock_num, will be aggressively filled regardless of where the ladder is
+    # currently quoted.  This means: wrong-direction trades after an options
+    # order (e.g. selling when a call buyer has pushed stock_num up) face heavy
+    # adverse selection even though the resting price looks fine to the quote.
+    # Fill probability per 500 ms update: 15 % per tick of adverse distance,
+    # capping at 100 % at ~7 ticks.  Fills are synthetic (no book volume consumed).
+    hidden_fair = board["stock_num"]
+    for price, data in list(levels.items()):
+        if data["user_buy"] > 0 and price > hidden_fair + 1e-9:
+            ticks_bad = (price - hidden_fair) / MIN_TICK
+            if random.random() < min(1.0, ticks_bad * 0.15):
+                fill_qty           = data["user_buy"]
+                data["filled_buy"] += fill_qty
+                data["user_buy"]    = 0
+
+        if data["user_sell"] > 0 and price < hidden_fair - 1e-9:
+            ticks_bad = (hidden_fair - price) / MIN_TICK
+            if random.random() < min(1.0, ticks_bad * 0.15):
+                fill_qty            = data["user_sell"]
+                data["filled_sell"] += fill_qty
+                data["user_sell"]    = 0
+
+    # ── Commit the new book state ─────────────────────────────────────────────
+    board["best_bid"]   = new_best_bid
+    board["best_offer"] = new_best_offer
+    board["stock_spread"]["bid"]   = new_best_bid
+    board["stock_spread"]["offer"] = new_best_offer
+
+    # stock_num (hidden fair) and fair_mid (quoted ladder center) are kept in
+    # sync via the shared drift_delta above.  Do NOT overwrite stock_num here —
+    # options/combo impact writes to stock_num directly to create the gap that
+    # user stock trading is meant to close.
+
+
+def _market_update_worker():
+    """Background thread: advances simulated market every 500 ms."""
+    while True:
+        time.sleep(0.5)
+        with _board_lock:
+            try:
+                _apply_market_update(BOARD)
+            except Exception as exc:
+                print(f"[market-update] {exc}")
 
 
 def safe_positive_int(value):
@@ -270,7 +596,11 @@ def normal_cdf(x, mu, sigma):
 
 def generate_level_liquidity(board, level_price, direction):
     sigma = board["impact_function"] * board["stock_size"] / 5
-    cdf = normal_cdf(level_price, board["stock_num"], sigma)
+    # Centre liquidity on the quoted ladder price (fair_mid), not the hidden fair
+    # (stock_num), so book depth reflects the current displayed market, not the
+    # yet-to-be-discovered target.
+    quoted_fair = board.get("dynamics", {}).get("fair_mid", board["stock_num"])
+    cdf = normal_cdf(level_price, quoted_fair, sigma)
     area = cdf if direction == "buy" else (1.0 - cdf)
     if area > 0.5:
         base = board["stock_size"] * 1.5 * (math.tan(area * math.pi / 2.0) - 1.0)
@@ -418,10 +748,12 @@ _COMBO_MULTIPLIERS = np.arange(1.0, 10.5, 0.5)
 
 
 def _clip_stock_fair(board):
-    """Clamp stock_num so it never sits outside the quoted bid-ask spread."""
-    ceiling = board['stock_spread']['offer']
-    floor   = board['stock_spread']['bid']
-    board['stock_num'] = max(floor, min(ceiling, board['stock_num']))
+    """Clamp stock_num within ±25 ticks of the quoted ladder center (fair_mid).
+    The hidden fair is allowed to diverge from the ladder to create price-discovery
+    opportunities, but we cap the gap to prevent runaway options pricing."""
+    fair   = board["dynamics"]["fair_mid"]
+    window = 25 * MIN_TICK
+    board['stock_num'] = max(fair - window, min(fair + window, board['stock_num']))
 
 
 def _apply_combo_impact(board, combo_size, side):
@@ -1184,6 +1516,133 @@ def trade_stock_route():
 
 
 
+@app.route("/get_ladder")
+def get_ladder():
+    with _board_lock:
+        best_bid   = BOARD["best_bid"]
+        best_offer = BOARD["best_offer"]
+        levels     = {p: dict(d) for p, d in BOARD["ladder_levels"].items()}
+    mid = (best_bid + best_offer) / 2
+    # Snap to nearest cent so the mid indicator always lands on an existing tick
+    # row. Using the raw sub-cent mid caused it to render identically (via
+    # JS .toFixed(2)) to an adjacent gap-price row, producing a duplicate.
+    display_mid = round_to_cent(mid)
+    N = 15
+
+    offer_prices = sorted([p for p in levels if p >= best_offer])[:N]
+    bid_prices   = sorted([p for p in levels if p <= best_bid], reverse=True)[:N]
+
+    # Prices strictly between best_bid and best_offer (the spread gap)
+    gap_prices = []
+    p = round_to_cent(best_offer - MIN_TICK)
+    while p > best_bid + MIN_TICK / 2:
+        gap_prices.append(p)
+        p = round_to_cent(p - MIN_TICK)
+
+    def _make_row(price, side, d=None):
+        if d is None:
+            d = levels.get(price, {
+                "market_bid": 0, "market_offer": 0,
+                "user_buy": 0, "user_sell": 0,
+                "filled_buy": 0, "filled_sell": 0,
+            })
+        is_mid_row = abs(price - display_mid) < 1e-9
+        if side == "offer":
+            vol = d["market_offer"] + d["user_sell"]
+            bid_val, offer_val = None, (vol if vol > 0 else None)
+        elif side == "bid":
+            vol = d["market_bid"] + d["user_buy"]
+            bid_val, offer_val = (vol if vol > 0 else None), None
+        else:
+            bid_val, offer_val = None, None
+        return {
+            "price":       round(price, 2),
+            "bid":         bid_val,
+            "offer":       offer_val,
+            "you_buy":     d["user_buy"]    if d["user_buy"]    > 0 else None,
+            "you_sell":    d["user_sell"]   if d["user_sell"]   > 0 else None,
+            "filled_buy":  d["filled_buy"]  if d["filled_buy"]  > 0 else None,
+            "filled_sell": d["filled_sell"] if d["filled_sell"] > 0 else None,
+            "is_mid":      is_mid_row,
+            "side":        "mid" if is_mid_row else side,
+        }
+
+    # Build all prices in descending order; insert virtual mid row when needed
+    all_prices = sorted(set(offer_prices) | set(gap_prices) | set(bid_prices), reverse=True)
+
+    rows = []
+    # If display_mid falls exactly on a tick already in the list, _make_row will
+    # mark it; pre-set mid_inserted so the fallback block doesn't add a duplicate.
+    mid_inserted = any(abs(p - display_mid) < 1e-9 for p in all_prices)
+
+    for p in all_prices:
+        # Insert a virtual mid row just before the first price that falls below display_mid
+        if not mid_inserted and p < display_mid - 1e-9:
+            mid_inserted = True
+            rows.append({
+                "price": display_mid, "bid": None, "offer": None,
+                "you_buy": None, "you_sell": None,
+                "filled_buy": None, "filled_sell": None,
+                "is_mid": True, "side": "mid",
+            })
+        if p >= best_offer:
+            rows.append(_make_row(p, "offer", levels.get(p)))
+        elif p <= best_bid:
+            rows.append(_make_row(p, "bid", levels.get(p)))
+        else:
+            rows.append(_make_row(p, "spread"))
+
+    if not mid_inserted:
+        rows.append({
+            "price": display_mid, "bid": None, "offer": None,
+            "you_buy": None, "you_sell": None,
+            "filled_buy": None, "filled_sell": None,
+            "is_mid": True, "side": "mid",
+        })
+
+    return jsonify({
+        "rows":       rows,
+        "best_bid":   best_bid,
+        "best_offer": best_offer,
+        "mid":        round(mid, 4),
+    })
+
+
+@app.route("/cancel_ladder_orders", methods=["POST"])
+def cancel_ladder_orders():
+    with _board_lock:
+        levels = BOARD["ladder_levels"]
+        cancelled_buy = cancelled_sell = 0
+        for d in levels.values():
+            cancelled_buy  += d["user_buy"]
+            cancelled_sell += d["user_sell"]
+            d["user_buy"]  = 0
+            d["user_sell"] = 0
+        _update_ladder_best_prices(BOARD)
+        stock = dict(BOARD["stock_spread"])
+    parts = []
+    if cancelled_buy  > 0: parts.append(f"{cancelled_buy:,} buy")
+    if cancelled_sell > 0: parts.append(f"{cancelled_sell:,} sell")
+    msg = "Cancelled " + " / ".join(parts) if parts else "No resting orders to cancel"
+    return jsonify({"ok": True, "message": msg, "stock": stock})
+
+
+@app.route("/place_ladder_order", methods=["POST"])
+def place_ladder_order():
+    data  = request.json or {}
+    side  = data.get("side")
+    qty   = safe_positive_int(data.get("qty"))
+    price = safe_price(data.get("price"))
+
+    if side not in ("buy", "sell") or qty is None or price is None:
+        return jsonify({"ok": False, "message": "Invalid order parameters"}), 400
+
+    with _board_lock:
+        result = execute_ladder_order(BOARD, side, qty, price)
+        result["stock"] = dict(BOARD["stock_spread"])
+    return jsonify(result)
+
+
 @app.route("/")
 def index():
     return render_template(
@@ -1265,7 +1724,9 @@ def reveal_at():
 @app.route("/new_board")
 def new_board():
     global BOARD
-    BOARD = generate_opening_board()
+    new = generate_opening_board()
+    with _board_lock:
+        BOARD = new
     return redirect(url_for("index"))
 
 @app.route("/make_market")
@@ -1709,12 +2170,16 @@ def submit_spread_market():
 speech_queue = queue.Queue()
 
 if __name__ == "__main__":
-    # Start the worker thread
+    # Speech worker
     t = threading.Thread(target=speech_worker, daemon=True)
     t.start()
 
+    # Market dynamics worker (updates ladder every 500 ms)
+    t_market = threading.Thread(target=_market_update_worker, daemon=True)
+    t_market.start()
+
     # use_reloader=False is important! 
-    # If True, Flask starts two processes and the thread will break.
+    # If True, Flask starts two processes and the threads will break.
     app.run(debug=True, use_reloader=False, threaded=True)
 
 
