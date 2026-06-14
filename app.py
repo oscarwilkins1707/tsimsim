@@ -563,11 +563,10 @@ def _apply_market_update(board):
     dyn["fair_mid"]    += drift_fair
     board["stock_num"] += drift_delta   # hidden fair always drifts at full speed
 
-    # Very slow automatic convergence of the quoted price toward the hidden fair.
-    # Rate 0.003/s → half-life ~231 s; the gap is ~96 % intact after 15 s, giving
-    # the user ample time to act before the market self-corrects.
+    # Automatic convergence of the quoted price toward the hidden fair.
+    # Rate 0.05/s → half-life ~14 s; the market visibly re-centres within ~30 s.
     gap = board["stock_num"] - dyn["fair_mid"]
-    dyn["fair_mid"] += gap * 0.003 * dt
+    dyn["fair_mid"] += gap * 0.05 * dt
 
     new_fair      = dyn["fair_mid"]
     half_spread   = dyn["half_spread"]
@@ -632,24 +631,39 @@ def _apply_market_update(board):
     # Two fill mechanisms are unified here, both keyed to the hidden true fair
     # (stock_num) rather than the quoted ladder centre.
     #
-    # Fills are always capped to a chunk anchored on stock_size so that larger
-    # user orders are absorbed over many ticks rather than in one event.
-    # This mirrors the customer-resting-order resistance system.
+    # ── Tunable fill-speed parameters ────────────────────────────────────────
+    # BAD-DIRECTION orders (buy > fair, sell < fair) — filled aggressively:
+    #   BAD_CROSS_BASE   chunk base when the market crosses the order
+    #   BAD_CROSS_SLOPE  extra chunk per tick of adverseness
+    #   BAD_CROSS_CAP    maximum chunk as a fraction of stock_size (per tick)
+    #   BAD_SPONT_PROB   per-tick spontaneous fill probability per tick-of-adverseness
+    #   BAD_SPONT_BASE   spontaneous chunk base
+    #   BAD_SPONT_SLOPE  extra spontaneous chunk per tick of adverseness
+    #   BAD_SPONT_CAP    maximum spontaneous chunk as a fraction of stock_size
     #
-    # Chunk formulas (per 500 ms tick):
-    #   bad-cross  : stock_size × min(0.50, 0.10 + ticks_bad × 0.10)
-    #   bad-spont  : stock_size × min(0.25, 0.03 + ticks_bad × 0.06)
-    #   good-cross : stock_size × 0.05   (market makers nibble, never lift whole)
+    # GOOD-DIRECTION orders (buy ≤ fair, sell ≥ fair) — filled passively:
+    #   GOOD_CROSS_PROB  per-tick probability of a nibble when market is at the level
+    #   GOOD_CROSS_RATE  nibble chunk size as a fraction of stock_size
+    # Chunks for bad-direction fills are now a *fraction of the remaining order*,
+    # not of stock_size.  This makes large orders fill proportionally fast and
+    # removes the stock_size ceiling that previously limited throughput.
     #
-    # GOOD-DIRECTION orders (buy ≤ fair, sell ≥ fair):
-    #   Market makers back off.  Only filled when the quoted price reaches the
-    #   level AND a 12 % per-tick probability fires.  Chunk is small (~5 % of
-    #   stock_size), so a large well-priced order takes many ticks to fill.
+    # Spontaneous fill (informed algos, market hasn't crossed yet):
+    #   At 2 ticks bad (probability = 1.0): rate ≈ 0.07 / tick
+    #   → 99 % of any order size gone in ~3 s (60 ticks × 50 ms)
     #
-    # BAD-DIRECTION orders (buy > fair, sell < fair):
-    #   (a) Market crosses the order → chunk fill, sized by adverseness.
-    #   (b) Spontaneous adverse-selection by informed algos → probability gate
-    #       (25 % per tick of adverse distance) then a smaller chunk fill.
+    # Cross fill (market is at/through the bad price):
+    #   At 2 ticks bad: rate ≈ 0.40 → 99 % gone in ~10 ticks (~0.5 s)
+    BAD_CROSS_BASE  = 0.20   # fraction of remaining per tick (market crosses level)
+    BAD_CROSS_SLOPE = 0.10   # extra fraction per tick of adverseness
+    BAD_CROSS_CAP   = 0.50   # ceiling fraction per tick
+    BAD_SPONT_PROB  = 0.50   # per-tick probability per tick-of-adverseness (→ 1.0 at 2 ticks bad)
+    BAD_SPONT_BASE  = 0.01   # fraction of remaining per tick (spontaneous)
+    BAD_SPONT_SLOPE = 0.03   # extra fraction per tick of adverseness (0.07 at 2 ticks bad)
+    BAD_SPONT_CAP   = 0.50   # ceiling fraction per tick
+    GOOD_CROSS_PROB = 0.12   # unchanged — good orders fill slowly
+    GOOD_CROSS_RATE = 0.05   # fraction of stock_size (good fills stay stock_size-anchored)
+
     hidden_fair = board["stock_num"]
     ref_size    = max(1.0, float(board["stock_size"]))
 
@@ -662,23 +676,23 @@ def _apply_market_update(board):
                 ticks_bad = (price - hidden_fair) / MIN_TICK
                 # (a) Market moved to/through this price → chunk fill, scaled by adverseness.
                 if price >= new_best_offer:
-                    cross_rate = min(0.50, 0.10 + ticks_bad * 0.10)
-                    fill_qty   = max(1, min(remaining, int(ref_size * cross_rate)))
+                    cross_rate = min(BAD_CROSS_CAP, BAD_CROSS_BASE + ticks_bad * BAD_CROSS_SLOPE)
+                    fill_qty   = max(1, min(remaining, int(remaining * cross_rate)))
                     levels[price]["market_offer"] = max(
                         0, levels[price]["market_offer"] - fill_qty)
                     data["filled_buy"] += fill_qty
                     data["user_buy"]   -= fill_qty
                 # (b) Spontaneous adverse selection by informed algos.
-                elif random.random() < min(1.0, ticks_bad * 0.25):
-                    spont_rate = min(0.25, 0.03 + ticks_bad * 0.06)
-                    fill_qty   = max(1, min(remaining, int(ref_size * spont_rate)))
+                elif random.random() < min(1.0, ticks_bad * BAD_SPONT_PROB):
+                    spont_rate = min(BAD_SPONT_CAP, BAD_SPONT_BASE + ticks_bad * BAD_SPONT_SLOPE)
+                    fill_qty   = max(1, min(remaining, int(remaining * spont_rate)))
                     data["filled_buy"] += fill_qty
                     data["user_buy"]   -= fill_qty
             else:
                 # Good trade: buying at or below fair.
                 # Market makers back off; small chance of a nibble-sized fill.
-                if price >= new_best_offer and random.random() < 0.12:
-                    fill_qty = max(1, min(remaining, int(ref_size * 0.05)))
+                if price >= new_best_offer and random.random() < GOOD_CROSS_PROB:
+                    fill_qty = max(1, min(remaining, int(ref_size * GOOD_CROSS_RATE)))
                     levels[price]["market_offer"] = max(
                         0, levels[price]["market_offer"] - fill_qty)
                     data["filled_buy"] += fill_qty
@@ -691,32 +705,33 @@ def _apply_market_update(board):
                 ticks_bad = (hidden_fair - price) / MIN_TICK
                 # (a) Market moved to/through this price → chunk fill, scaled by adverseness.
                 if price <= new_best_bid:
-                    cross_rate = min(0.50, 0.10 + ticks_bad * 0.10)
-                    fill_qty   = max(1, min(remaining, int(ref_size * cross_rate)))
+                    cross_rate = min(BAD_CROSS_CAP, BAD_CROSS_BASE + ticks_bad * BAD_CROSS_SLOPE)
+                    fill_qty   = max(1, min(remaining, int(remaining * cross_rate)))
                     levels[price]["market_bid"] = max(
                         0, levels[price]["market_bid"] - fill_qty)
                     data["filled_sell"] += fill_qty
                     data["user_sell"]   -= fill_qty
                 # (b) Spontaneous adverse selection.
-                elif random.random() < min(1.0, ticks_bad * 0.25):
-                    spont_rate = min(0.25, 0.03 + ticks_bad * 0.06)
-                    fill_qty   = max(1, min(remaining, int(ref_size * spont_rate)))
+                elif random.random() < min(1.0, ticks_bad * BAD_SPONT_PROB):
+                    spont_rate = min(BAD_SPONT_CAP, BAD_SPONT_BASE + ticks_bad * BAD_SPONT_SLOPE)
+                    fill_qty   = max(1, min(remaining, int(remaining * spont_rate)))
                     data["filled_sell"] += fill_qty
                     data["user_sell"]   -= fill_qty
             else:
                 # Good trade: selling at or above fair.
-                if price <= new_best_bid and random.random() < 0.12:
-                    fill_qty = max(1, min(remaining, int(ref_size * 0.05)))
+                if price <= new_best_bid and random.random() < GOOD_CROSS_PROB:
+                    fill_qty = max(1, min(remaining, int(ref_size * GOOD_CROSS_RATE)))
                     levels[price]["market_bid"] = max(
                         0, levels[price]["market_bid"] - fill_qty)
                     data["filled_sell"] += fill_qty
                     data["user_sell"]   -= fill_qty
 
-    # ── Respect user resting orders before committing BBO ────────────────────
-    # User resting bids/offers define hard constraints on the book: no market
-    # offer may rest at or below a user bid, and no market bid may rest at or
-    # above a user offer.  Without this clamp, a downward fair_mid drift would
-    # seed phantom offers below a resting user bid, producing a crossed ladder.
+    # ── Prevent phantom orders crossing user resting orders ──────────────────
+    # Market offers must not rest at or below a user bid, and market bids must
+    # not rest at or above a user offer (those would be immediate trades, not
+    # passive quotes).  The BBO itself is driven purely by fair_mid so the
+    # apparent fair converges freely; user resting orders only clear ghost
+    # liquidity on the wrong side and nudge the BBO away from a crossed display.
     user_buy_prices  = [p for p, d in levels.items() if d["user_buy"]  > 0]
     user_sell_prices = [p for p, d in levels.items() if d["user_sell"] > 0]
 
@@ -725,33 +740,33 @@ def _apply_market_update(board):
 
     if user_buy_prices:
         user_top_bid = max(user_buy_prices)
-        if user_top_bid > commit_bid:
-            # Remove any market offers that now sit at or inside the user's bid.
-            for price, data in levels.items():
-                if data["market_offer"] > 0 and price <= user_top_bid:
-                    data["market_offer"] = 0
-            commit_bid = user_top_bid
-            if commit_offer <= commit_bid:
-                commit_offer = round_to_cent(commit_bid + MIN_TICK)
-                if commit_offer not in levels:
-                    levels[commit_offer] = _empty_level()
-                if levels[commit_offer]["market_offer"] == 0:
-                    levels[commit_offer]["market_offer"] = _sparse_level_size() or _random_lot()
+        # Clear any market offers that would cross the user's resting bid.
+        for price, data in levels.items():
+            if data["market_offer"] > 0 and price <= user_top_bid:
+                data["market_offer"] = 0
+        # Keep the committed offer above the user's bid to avoid a crossed display,
+        # but do NOT pin commit_bid to user_top_bid — fair_mid drives the bid side.
+        if commit_offer <= user_top_bid:
+            commit_offer = round_to_cent(user_top_bid + MIN_TICK)
+            if commit_offer not in levels:
+                levels[commit_offer] = _empty_level()
+            if levels[commit_offer]["market_offer"] == 0:
+                levels[commit_offer]["market_offer"] = _sparse_level_size() or _random_lot()
 
     if user_sell_prices:
         user_top_offer = min(user_sell_prices)
-        if user_top_offer < commit_offer:
-            # Remove any market bids that now sit at or inside the user's offer.
-            for price, data in levels.items():
-                if data["market_bid"] > 0 and price >= user_top_offer:
-                    data["market_bid"] = 0
-            commit_offer = user_top_offer
-            if commit_bid >= commit_offer:
-                commit_bid = round_to_cent(commit_offer - MIN_TICK)
-                if commit_bid not in levels:
-                    levels[commit_bid] = _empty_level()
-                if levels[commit_bid]["market_bid"] == 0:
-                    levels[commit_bid]["market_bid"] = _sparse_level_size() or _random_lot()
+        # Clear any market bids that would cross the user's resting offer.
+        for price, data in levels.items():
+            if data["market_bid"] > 0 and price >= user_top_offer:
+                data["market_bid"] = 0
+        # Keep the committed bid below the user's offer to avoid a crossed display,
+        # but do NOT pin commit_offer to user_top_offer — fair_mid drives the offer side.
+        if commit_bid >= user_top_offer:
+            commit_bid = round_to_cent(user_top_offer - MIN_TICK)
+            if commit_bid not in levels:
+                levels[commit_bid] = _empty_level()
+            if levels[commit_bid]["market_bid"] == 0:
+                levels[commit_bid]["market_bid"] = _sparse_level_size() or _random_lot()
 
     # ── Commit the new book state ─────────────────────────────────────────────
     board["best_bid"]   = commit_bid
