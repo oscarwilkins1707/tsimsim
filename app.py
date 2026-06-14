@@ -162,13 +162,13 @@ def generate_opening_board():
     first_info = f"{K} straddle: {atm_straddle}"
 
     stock_size = random.choice([20,30,30,50,50,75,100,150])
-    impact_function = round(float(np.random.uniform(0.005, 0.025) * 0.8), 4)
+    impact_function = round(float(np.random.uniform(0.005, 0.05) * 0.8), 4)
     rand_factor = float(np.random.uniform(0.5, 1.5))
 
-    # Spread: 1-6 cents wide, weighted toward tighter
+    # Spread: 1-3 cents wide, weighted toward tighter
     full_spread_ticks = random.choices(
-        [1, 2, 3, 4, 5, 6],
-        weights=[10, 30, 25, 18, 12, 5]
+        [1, 2, 3],
+        weights=[10, 30, 25]
     )[0]
     spread = full_spread_ticks * MIN_TICK
     half_spread = spread / 2.0
@@ -250,18 +250,19 @@ def generate_opening_board():
         },
     }
 
-    board["ladder_levels"] = generate_ladder_levels(bid, offer)
-    board["best_bid"]      = bid
-    board["best_offer"]    = offer
+    board["ladder_levels"]           = generate_ladder_levels(bid, offer)
+    board["best_bid"]                = bid
+    board["best_offer"]              = offer
+    board["customer_resting_orders"] = []
 
-    # ── Market dynamics (randomised per board, fixed for its lifetime) ──────
-    tick_vol    = float(np.random.uniform(0.15, 1.0))   # random-walk speed (ticks/√s)
-    drift_alpha = float(np.random.uniform(0.02, 0.15))  # drift mean-reversion rate
-    drift_sigma = float(np.random.uniform(0.01, 0.06))  # drift innovation noise (ticks/s per √s)
-    drift_std   = drift_sigma / max(math.sqrt(2 * drift_alpha), 1e-9)
+    # ── Market dynamics — default matches UI drift slider at "Very high" (level=0.75) ──
+    _lv         = 0.75
+    tick_vol    = 0.001  * (2000.0  ** _lv)   # ≈ 0.299  random-walk speed (ticks/√s)
+    drift_sigma = 0.0001 * (30000.0 ** _lv)   # ≈ 0.228  OU drift innovation
+    drift_alpha = 10.0   * (0.01    ** _lv)   # ≈ 0.316  mean-reversion speed
     board["dynamics"] = {
         "fair_mid":    (bid + offer) / 2.0,
-        "drift":       float(np.random.normal(0, drift_std)),
+        "drift":       0.0,   # start with no directional bias
         "tick_vol":    tick_vol,
         "drift_alpha": drift_alpha,
         "drift_sigma": drift_sigma,
@@ -280,11 +281,16 @@ def round_to_cent(value):
 # ─── Stock ladder helpers ──────────────────────────────────────────────────────
 
 def _sparse_level_size():
-    """Sparse order-book size: ~35 % empty, rest lognormal-large."""
+    """Sparse order-book size: ~35 % empty, rest lognormal with irregular (non-round) sizes."""
     if random.random() < 0.35:
         return 0
-    size = max(200, int(round(float(np.random.lognormal(mean=7.0, sigma=0.6)) / 100) * 100))
-    return min(size, 15000)
+    size = int(float(np.random.lognormal(mean=6.5, sigma=0.8)))
+    return max(47, min(size, 15000))
+
+
+def _random_lot():
+    """Small, irregular lot for churn additions — looks like a real inbound order."""
+    return int(float(np.random.lognormal(mean=5.2, sigma=0.75)))
 
 
 def _empty_level():
@@ -331,7 +337,11 @@ def execute_ladder_order(board, side, qty, limit):
 
     if side == "buy":
         while remaining > 0:
-            offer_with_vol = [p for p, d in levels.items() if d["market_offer"] > 0]
+            # Only fill against offer levels at or above the current best offer.
+            # Stale market_offer entries that drifted below the bid must not fill
+            # passive orders placed in the bid zone.
+            offer_with_vol = [p for p, d in levels.items()
+                              if d["market_offer"] > 0 and p >= board["best_offer"]]
             if not offer_with_vol:
                 break
             best_p = min(offer_with_vol)
@@ -356,7 +366,9 @@ def execute_ladder_order(board, side, qty, limit):
 
     elif side == "sell":
         while remaining > 0:
-            bids_with_vol = [p for p, d in levels.items() if d["market_bid"] > 0]
+            # Only fill against bid levels at or below the current best bid.
+            bids_with_vol = [p for p, d in levels.items()
+                             if d["market_bid"] > 0 and p <= board["best_bid"]]
             if not bids_with_vol:
                 break
             best_p = max(bids_with_vol)
@@ -394,8 +406,16 @@ def execute_ladder_order(board, side, qty, limit):
     if total_filled > 0:
         dyn = board.get("dynamics")
         if dyn:
-            impact = (total_filled / board["stock_size"]) * board["impact_function"] * 0.5
-            dyn["fair_mid"] += impact if side == "buy" else -impact
+            hidden_fair   = board["stock_num"]
+            avg_fill_price = sum(f["price"] * f["qty"] for f in fills) / total_filled
+            # Good-direction trade (buy below fair, sell above fair): market makers
+            # are just passively providing liquidity → no direct fair_mid push.
+            # Bad-direction trade (buy above fair, sell below fair): market makers
+            # treat the aggression as a signal → small fair_mid move confirms their view.
+            is_bad = (avg_fill_price > hidden_fair) if side == "buy" else (avg_fill_price < hidden_fair)
+            if is_bad:
+                impact = (total_filled / board["stock_size"]) * board["impact_function"] * 0.03
+                dyn["fair_mid"] += impact if side == "buy" else -impact
 
     if total_filled > 0:
         avg_price = round(sum(f["price"] * f["qty"] for f in fills) / total_filled, 4)
@@ -420,11 +440,51 @@ def execute_ladder_order(board, side, qty, limit):
 
 # ─── Dynamic market ────────────────────────────────────────────────────────────
 
+def _churn_ladder_liquidity(board):
+    """Simulate intra-tick market activity: partial trades eat size, new orders add size."""
+    levels    = board["ladder_levels"]
+    best_bid  = board["best_bid"]
+    best_offer = board["best_offer"]
+
+    for price, data in levels.items():
+        # ── Bid side ──────────────────────────────────────────────────────────
+        if data["market_bid"] > 0:
+            r = random.random()
+            if r < 0.10:
+                # A trade hits this level, eating an irregular chunk
+                pct   = random.uniform(0.04, 0.30)
+                eaten = max(1, int(data["market_bid"] * pct))
+                # Keep inside bid alive; outer levels can drain to zero
+                if price == best_bid:
+                    data["market_bid"] = max(_random_lot(), data["market_bid"] - eaten)
+                else:
+                    data["market_bid"] = max(0, data["market_bid"] - eaten)
+            elif r < 0.16:
+                # A new limit order arrives at this level
+                data["market_bid"] = min(data["market_bid"] + _random_lot(), 25000)
+
+        # ── Offer side ────────────────────────────────────────────────────────
+        if data["market_offer"] > 0:
+            r = random.random()
+            if r < 0.10:
+                pct   = random.uniform(0.04, 0.30)
+                eaten = max(1, int(data["market_offer"] * pct))
+                if price == best_offer:
+                    data["market_offer"] = max(_random_lot(), data["market_offer"] - eaten)
+                else:
+                    data["market_offer"] = max(0, data["market_offer"] - eaten)
+            elif r < 0.16:
+                data["market_offer"] = min(data["market_offer"] + _random_lot(), 25000)
+
+
 def _apply_market_update(board):
     """Advance the simulated market by one time-step (called by background worker)."""
     dyn = board.get("dynamics")
     if not dyn or not dyn.get("enabled", True):
         return
+
+    # Simulate active trading even when the NBBO hasn't moved yet
+    _churn_ladder_liquidity(board)
 
     now = time.time()
     if dyn["last_update"] is None:
@@ -450,14 +510,64 @@ def _apply_market_update(board):
         dyn["drift"] * MIN_TICK * dt
         + float(np.random.normal(0, dyn["tick_vol"] * MIN_TICK * math.sqrt(dt)))
     )
-    dyn["fair_mid"]    += drift_delta
-    board["stock_num"] += drift_delta
 
-    # Slow automatic convergence of the quoted price toward the hidden fair.
-    # Without user stock trading the gap closes in roughly 60–90 s, giving the
-    # user time to act but preventing permanent divergence.
+    # ── Customer resting order resistance ────────────────────────────────────
+    # Large make-market orders that did not cross create a floor (bid) or
+    # ceiling (offer) at their implied stock price.  This models market
+    # participants needing to absorb that liquidity before fair_mid can move
+    # through the level.  stock_num (the hidden fair) always drifts freely;
+    # only fair_mid (the displayed quoted price) is damped.
+    #
+    # Resistance = size / stock_size, mapped smoothly to [0, 1) via the
+    # Michaelis–Menten function:  resist = ratio / (ratio + 1).
+    # A 40× stock_size order gives resist ≈ 0.976, slowing movement by ~97 %.
+    # The order is worked through at 1.5 % per tick (good-to-fair) or 4 % per
+    # tick (bad-to-fair / adverse selection) whenever it is being tested.
+    cust_orders = board.setdefault("customer_resting_orders", [])
+    for _o in list(cust_orders):                         # age / expire
+        _o["age_ticks"] += 1
+        if _o["age_ticks"] > _o["max_ticks"] or _o["remaining"] <= 0:
+            cust_orders.remove(_o)
+
+    drift_fair = drift_delta    # will be damped if resistance > 0
+    if drift_delta != 0.0 and cust_orders:
+        cur_fair     = dyn["fair_mid"]
+        prop_fair    = cur_fair + drift_delta
+        hidden_fair  = board["stock_num"]
+        ref_size     = max(float(board["stock_size"]), 1.0)
+        total_resist = 0.0
+        for _o in cust_orders:
+            if _o["remaining"] <= 0:
+                continue
+            p = _o["price"]
+            # Floor order resists downward movement; ceiling resists upward
+            in_path = (
+                (_o["side"] == "bid"   and drift_delta < 0 and prop_fair < p <= cur_fair) or
+                (_o["side"] == "offer" and drift_delta > 0 and cur_fair <= p < prop_fair)
+            )
+            if not in_path:
+                continue
+            ratio        = _o["remaining"] / ref_size
+            resist       = ratio / (ratio + 1.0)        # smooth approach to 1
+            total_resist = max(total_resist, resist)
+            # Work through the order a fraction at a time
+            is_good = (
+                (_o["side"] == "bid"   and p <= hidden_fair) or  # bid at/below fair
+                (_o["side"] == "offer" and p >= hidden_fair)      # offer at/above fair
+            )
+            fill_rate   = 0.015 if is_good else 0.1
+            fill_chunk  = max(1, int(_o["remaining"] * fill_rate))
+            _o["remaining"] = max(0, _o["remaining"] - fill_chunk)
+        drift_fair = drift_delta * (1.0 - total_resist)
+
+    dyn["fair_mid"]    += drift_fair
+    board["stock_num"] += drift_delta   # hidden fair always drifts at full speed
+
+    # Very slow automatic convergence of the quoted price toward the hidden fair.
+    # Rate 0.003/s → half-life ~231 s; the gap is ~96 % intact after 15 s, giving
+    # the user ample time to act before the market self-corrects.
     gap = board["stock_num"] - dyn["fair_mid"]
-    dyn["fair_mid"] += gap * 0.01 * dt
+    dyn["fair_mid"] += gap * 0.003 * dt
 
     new_fair      = dyn["fair_mid"]
     half_spread   = dyn["half_spread"]
@@ -478,21 +588,31 @@ def _apply_market_update(board):
             data["market_bid"]   = 0
             data["market_offer"] = 0
 
+    # ── Clear stale crossed levels ────────────────────────────────────────────
+    # When the market moves, old offer entries can end up at bid-side prices
+    # and old bid entries at offer-side prices.  Leaving them causes passive
+    # orders placed in the bid/offer zone to fill instantly against ghost volume.
+    for price, data in levels.items():
+        if price <= new_best_bid and data["market_offer"] > 0:
+            data["market_offer"] = 0
+        if price >= new_best_offer and data["market_bid"] > 0:
+            data["market_bid"] = 0
+
     # ── Ensure inside bid has volume ──────────────────────────────────────────
     if new_best_bid not in levels:
         lvl = _empty_level()
-        lvl["market_bid"] = _sparse_level_size() or 300
+        lvl["market_bid"] = _sparse_level_size() or _random_lot()
         levels[new_best_bid] = lvl
     elif levels[new_best_bid]["market_bid"] == 0:
-        levels[new_best_bid]["market_bid"] = _sparse_level_size() or 300
+        levels[new_best_bid]["market_bid"] = _sparse_level_size() or _random_lot()
 
     # ── Ensure inside offer has volume ────────────────────────────────────────
     if new_best_offer not in levels:
         lvl = _empty_level()
-        lvl["market_offer"] = _sparse_level_size() or 300
+        lvl["market_offer"] = _sparse_level_size() or _random_lot()
         levels[new_best_offer] = lvl
     elif levels[new_best_offer]["market_offer"] == 0:
-        levels[new_best_offer]["market_offer"] = _sparse_level_size() or 300
+        levels[new_best_offer]["market_offer"] = _sparse_level_size() or _random_lot()
 
     # ── Generate any new outer levels as the book shifts ─────────────────────
     N_LEVELS = 30
@@ -508,52 +628,136 @@ def _apply_market_update(board):
             lvl["market_offer"] = _sparse_level_size()
             levels[op] = lvl
 
-    # ── Fill user resting orders crossed by the move (silent fill) ───────────
-    # Market moved DOWN (offer fell) → user buys at or above new offer get hit
-    # Market moved UP   (bid rose)   → user sells at or below new bid  get hit
-    for price, data in list(levels.items()):
-        if data["user_buy"] > 0 and price >= new_best_offer:
-            fill_qty = data["user_buy"]
-            levels[price]["market_offer"] = max(0, levels[price]["market_offer"] - fill_qty)
-            data["filled_buy"] += fill_qty
-            data["user_buy"]    = 0
-
-        if data["user_sell"] > 0 and price <= new_best_bid:
-            fill_qty = data["user_sell"]
-            levels[price]["market_bid"] = max(0, levels[price]["market_bid"] - fill_qty)
-            data["filled_sell"] += fill_qty
-            data["user_sell"]   = 0
-
-    # ── Adverse selection: pick off resting orders that are bad to the hidden fair
-    # Informed algos know the true fair is board["stock_num"], not the quoted
-    # ladder center (fair_mid).  A resting buy above stock_num, or a sell below
-    # stock_num, will be aggressively filled regardless of where the ladder is
-    # currently quoted.  This means: wrong-direction trades after an options
-    # order (e.g. selling when a call buyer has pushed stock_num up) face heavy
-    # adverse selection even though the resting price looks fine to the quote.
-    # Fill probability per 500 ms update: 15 % per tick of adverse distance,
-    # capping at 100 % at ~7 ticks.  Fills are synthetic (no book volume consumed).
+    # ── Direction-aware resting order fills ──────────────────────────────────
+    # Two fill mechanisms are unified here, both keyed to the hidden true fair
+    # (stock_num) rather than the quoted ladder centre.
+    #
+    # Fills are always capped to a chunk anchored on stock_size so that larger
+    # user orders are absorbed over many ticks rather than in one event.
+    # This mirrors the customer-resting-order resistance system.
+    #
+    # Chunk formulas (per 500 ms tick):
+    #   bad-cross  : stock_size × min(0.50, 0.10 + ticks_bad × 0.10)
+    #   bad-spont  : stock_size × min(0.25, 0.03 + ticks_bad × 0.06)
+    #   good-cross : stock_size × 0.05   (market makers nibble, never lift whole)
+    #
+    # GOOD-DIRECTION orders (buy ≤ fair, sell ≥ fair):
+    #   Market makers back off.  Only filled when the quoted price reaches the
+    #   level AND a 12 % per-tick probability fires.  Chunk is small (~5 % of
+    #   stock_size), so a large well-priced order takes many ticks to fill.
+    #
+    # BAD-DIRECTION orders (buy > fair, sell < fair):
+    #   (a) Market crosses the order → chunk fill, sized by adverseness.
+    #   (b) Spontaneous adverse-selection by informed algos → probability gate
+    #       (25 % per tick of adverse distance) then a smaller chunk fill.
     hidden_fair = board["stock_num"]
-    for price, data in list(levels.items()):
-        if data["user_buy"] > 0 and price > hidden_fair + 1e-9:
-            ticks_bad = (price - hidden_fair) / MIN_TICK
-            if random.random() < min(1.0, ticks_bad * 0.15):
-                fill_qty           = data["user_buy"]
-                data["filled_buy"] += fill_qty
-                data["user_buy"]    = 0
+    ref_size    = max(1.0, float(board["stock_size"]))
 
-        if data["user_sell"] > 0 and price < hidden_fair - 1e-9:
-            ticks_bad = (hidden_fair - price) / MIN_TICK
-            if random.random() < min(1.0, ticks_bad * 0.15):
-                fill_qty            = data["user_sell"]
-                data["filled_sell"] += fill_qty
-                data["user_sell"]    = 0
+    for price, data in list(levels.items()):
+
+        # ---- user resting buys ----
+        if data["user_buy"] > 0:
+            remaining = data["user_buy"]
+            if price > hidden_fair + 1e-9:
+                ticks_bad = (price - hidden_fair) / MIN_TICK
+                # (a) Market moved to/through this price → chunk fill, scaled by adverseness.
+                if price >= new_best_offer:
+                    cross_rate = min(0.50, 0.10 + ticks_bad * 0.10)
+                    fill_qty   = max(1, min(remaining, int(ref_size * cross_rate)))
+                    levels[price]["market_offer"] = max(
+                        0, levels[price]["market_offer"] - fill_qty)
+                    data["filled_buy"] += fill_qty
+                    data["user_buy"]   -= fill_qty
+                # (b) Spontaneous adverse selection by informed algos.
+                elif random.random() < min(1.0, ticks_bad * 0.25):
+                    spont_rate = min(0.25, 0.03 + ticks_bad * 0.06)
+                    fill_qty   = max(1, min(remaining, int(ref_size * spont_rate)))
+                    data["filled_buy"] += fill_qty
+                    data["user_buy"]   -= fill_qty
+            else:
+                # Good trade: buying at or below fair.
+                # Market makers back off; small chance of a nibble-sized fill.
+                if price >= new_best_offer and random.random() < 0.12:
+                    fill_qty = max(1, min(remaining, int(ref_size * 0.05)))
+                    levels[price]["market_offer"] = max(
+                        0, levels[price]["market_offer"] - fill_qty)
+                    data["filled_buy"] += fill_qty
+                    data["user_buy"]   -= fill_qty
+
+        # ---- user resting sells ----
+        if data["user_sell"] > 0:
+            remaining = data["user_sell"]
+            if price < hidden_fair - 1e-9:
+                ticks_bad = (hidden_fair - price) / MIN_TICK
+                # (a) Market moved to/through this price → chunk fill, scaled by adverseness.
+                if price <= new_best_bid:
+                    cross_rate = min(0.50, 0.10 + ticks_bad * 0.10)
+                    fill_qty   = max(1, min(remaining, int(ref_size * cross_rate)))
+                    levels[price]["market_bid"] = max(
+                        0, levels[price]["market_bid"] - fill_qty)
+                    data["filled_sell"] += fill_qty
+                    data["user_sell"]   -= fill_qty
+                # (b) Spontaneous adverse selection.
+                elif random.random() < min(1.0, ticks_bad * 0.25):
+                    spont_rate = min(0.25, 0.03 + ticks_bad * 0.06)
+                    fill_qty   = max(1, min(remaining, int(ref_size * spont_rate)))
+                    data["filled_sell"] += fill_qty
+                    data["user_sell"]   -= fill_qty
+            else:
+                # Good trade: selling at or above fair.
+                if price <= new_best_bid and random.random() < 0.12:
+                    fill_qty = max(1, min(remaining, int(ref_size * 0.05)))
+                    levels[price]["market_bid"] = max(
+                        0, levels[price]["market_bid"] - fill_qty)
+                    data["filled_sell"] += fill_qty
+                    data["user_sell"]   -= fill_qty
+
+    # ── Respect user resting orders before committing BBO ────────────────────
+    # User resting bids/offers define hard constraints on the book: no market
+    # offer may rest at or below a user bid, and no market bid may rest at or
+    # above a user offer.  Without this clamp, a downward fair_mid drift would
+    # seed phantom offers below a resting user bid, producing a crossed ladder.
+    user_buy_prices  = [p for p, d in levels.items() if d["user_buy"]  > 0]
+    user_sell_prices = [p for p, d in levels.items() if d["user_sell"] > 0]
+
+    commit_bid   = new_best_bid
+    commit_offer = new_best_offer
+
+    if user_buy_prices:
+        user_top_bid = max(user_buy_prices)
+        if user_top_bid > commit_bid:
+            # Remove any market offers that now sit at or inside the user's bid.
+            for price, data in levels.items():
+                if data["market_offer"] > 0 and price <= user_top_bid:
+                    data["market_offer"] = 0
+            commit_bid = user_top_bid
+            if commit_offer <= commit_bid:
+                commit_offer = round_to_cent(commit_bid + MIN_TICK)
+                if commit_offer not in levels:
+                    levels[commit_offer] = _empty_level()
+                if levels[commit_offer]["market_offer"] == 0:
+                    levels[commit_offer]["market_offer"] = _sparse_level_size() or _random_lot()
+
+    if user_sell_prices:
+        user_top_offer = min(user_sell_prices)
+        if user_top_offer < commit_offer:
+            # Remove any market bids that now sit at or inside the user's offer.
+            for price, data in levels.items():
+                if data["market_bid"] > 0 and price >= user_top_offer:
+                    data["market_bid"] = 0
+            commit_offer = user_top_offer
+            if commit_bid >= commit_offer:
+                commit_bid = round_to_cent(commit_offer - MIN_TICK)
+                if commit_bid not in levels:
+                    levels[commit_bid] = _empty_level()
+                if levels[commit_bid]["market_bid"] == 0:
+                    levels[commit_bid]["market_bid"] = _sparse_level_size() or _random_lot()
 
     # ── Commit the new book state ─────────────────────────────────────────────
-    board["best_bid"]   = new_best_bid
-    board["best_offer"] = new_best_offer
-    board["stock_spread"]["bid"]   = new_best_bid
-    board["stock_spread"]["offer"] = new_best_offer
+    board["best_bid"]   = commit_bid
+    board["best_offer"] = commit_offer
+    board["stock_spread"]["bid"]   = commit_bid
+    board["stock_spread"]["offer"] = commit_offer
 
     # stock_num (hidden fair) and fair_mid (quoted ladder center) are kept in
     # sync via the shared drift_delta above.  Do NOT overwrite stock_num here —
@@ -562,9 +766,9 @@ def _apply_market_update(board):
 
 
 def _market_update_worker():
-    """Background thread: advances simulated market every 500 ms."""
+    """Background thread: advances simulated market every 50 ms."""
     while True:
-        time.sleep(0.5)
+        time.sleep(0.05)
         with _board_lock:
             try:
                 _apply_market_update(BOARD)
@@ -747,6 +951,32 @@ _OPENING_K_LIST = [-3.0, -2.5, -2.0, -1.8, -1.5]
 _COMBO_MULTIPLIERS = np.arange(1.0, 10.5, 0.5)
 
 
+def _add_customer_resting_order(board, price, side, size):
+    """Register a large customer resting order for market-microstructure resistance.
+
+    A 'bid' at price X creates a *floor*: fair_mid resists moving below X.
+    An 'offer' at price X creates a *ceiling*: fair_mid resists moving above X.
+
+    Resistance magnitude = size / stock_size, clipped smoothly to [0, 1).
+    The order is gradually worked through (filled) each tick it is being tested;
+    fill rate is slower for good-to-fair orders and faster for adverse ones.
+    Orders expire after ~120 s regardless.
+
+    Only orders with stock-equivalent size >= 0.5 × stock_size are registered;
+    smaller orders have negligible effect and are silently ignored.
+    """
+    if float(size) < board["stock_size"] * 0.5:
+        return
+    board.setdefault("customer_resting_orders", []).append({
+        "price":     round_to_cent(float(price)),
+        "side":      side,       # 'bid' = floor, 'offer' = ceiling
+        "size":      int(size),
+        "remaining": int(size),
+        "max_ticks": 480,        # expire after 480 × 250 ms ≈ 120 s
+        "age_ticks": 0,
+    })
+
+
 def _clip_stock_fair(board):
     """Clamp stock_num within ±25 ticks of the quoted ladder center (fair_mid).
     The hidden fair is allowed to diverge from the ladder to create price-discovery
@@ -756,13 +986,25 @@ def _clip_stock_fair(board):
     board['stock_num'] = max(fair - window, min(fair + window, board['stock_num']))
 
 
-def _apply_combo_impact(board, combo_size, side):
-    """Adjust stock fair via Jacob's impact function when a combo order arrives."""
+def _apply_combo_impact(board, combo_size, stock_dir):
+    """Adjust stock fair when a combo order arrives.
+
+    stock_dir is the stock-equivalent directional signal, NOT the raw customer
+    side.  Callers must pre-compute stock_dir from orig_side and fair_combo sign:
+
+      calls-over (fair_combo >= 0):  stock_dir = orig_side
+          orig bid  (long call/short put)  → bullish  → 'bid'  → fair UP
+          orig offer (short call/long put) → bearish  → 'offer'→ fair DOWN
+
+      puts-over  (fair_combo < 0):   stock_dir = opposite(orig_side)
+          orig bid  (long put/short call)  → bearish  → 'offer'→ fair DOWN
+          orig offer (short put/long call) → bullish  → 'bid'  → fair UP
+    """
     normal_draw = float(np.random.normal(loc=0.5, scale=0.15))
     delta = (combo_size / board['stock_size']) * board['impact_function'] * normal_draw
-    if side == 'bid':   # customer buying → fair moves up
+    if stock_dir == 'bid':      # bullish stock-equivalent → fair moves up
         board['stock_num'] = round_to_cent(board['stock_num'] + delta)
-    else:               # customer selling → fair moves down
+    else:                       # bearish stock-equivalent → fair moves down
         board['stock_num'] = round_to_cent(board['stock_num'] - delta)
 
 
@@ -779,7 +1021,7 @@ def _combo_customer_price(board, strike, side):
         (board['stock_spread']['offer'] - board['stock_spread']['bid']) / 2.0,
         MIN_TICK
     )
-    k = float(np.random.choice(_COMBO_K_LIST)) + np.random.normal(loc=0.0, scale=0.03)
+    k = float(np.random.choice(_COMBO_K_LIST)) + np.random.normal(loc=-0.3, scale=0.15)
     edge = round_to_cent(k * half_spread)
     base = board['stock_num'] - strike + board['rc_num']
     price = round_to_cent(base - edge) if side == 'bid' else round_to_cent(base + edge)
@@ -820,11 +1062,41 @@ def generate_combo_order(board):
 
     # Compute fair and price BEFORE any impact
     fair_combo = board['stock_num'] - strike + board['rc_num']
+    orig_side  = side                                # save BEFORE any price-flip
     side, combo_price = _combo_customer_price(board, strike, side)
 
-    # Apply impact only when the order is aggressive vs fair
-    if (side == 'bid' and combo_price > fair_combo) or (side == 'offer' and combo_price < fair_combo):
-        _apply_combo_impact(board, combo_size, side)
+    # Derive stock_dir (bullish/bearish signal for _apply_combo_impact) from the
+    # ORIGINAL side (pre-flip) and the sign of fair_combo.  We must use orig_side
+    # rather than the post-flip 'side' because _combo_customer_price only flips
+    # when price < 0: for a barely puts-over combo the price may stay positive,
+    # leaving 'side' == orig_side even in puts-over territory.
+    #
+    # calls-over (fair_combo >= 0, strike <= stock approximately):
+    #   orig bid  → long call + short put  → synthetic long  → bullish → stock UP
+    #   orig offer → short call + long put  → synthetic short → bearish → stock DOWN
+    #   stock_dir = orig_side
+    #
+    # puts-over (fair_combo < 0, strike > stock approximately):
+    #   orig bid  → long put + short call   → synthetic short → bearish → stock DOWN
+    #   orig offer → short put + long call   → synthetic long  → bullish → stock UP
+    #   stock_dir = INVERTED orig_side
+    if fair_combo >= 0:
+        _stock_dir = orig_side
+    else:
+        _stock_dir = 'offer' if orig_side == 'bid' else 'bid'
+
+    # Aggressiveness check: for calls-over compare against fair_combo directly;
+    # for puts-over both side and price have been normalised to positive so we
+    # compare against abs(fair_combo) with inverted inequalities.
+    if fair_combo >= 0:
+        _aggressive = (side == 'bid' and combo_price > fair_combo) or \
+                      (side == 'offer' and combo_price < fair_combo)
+    else:
+        _abs_fair   = abs(fair_combo)
+        _aggressive = (side == 'bid' and combo_price < _abs_fair) or \
+                      (side == 'offer' and combo_price > _abs_fair)
+    if _aggressive:
+        _apply_combo_impact(board, combo_size, _stock_dir)
 
     fair_combo = board['stock_num'] - strike + board['rc_num']
     combo_price_shift = abs(round(abs(fair_combo) - abs(combo_price), 2))
@@ -855,7 +1127,14 @@ def generate_combo_order(board):
 
 
 def generate_customer_combo_price(board, strike):
-    """Same impact + price logic as generate_combo_order, for the make-market flow."""
+    """Price generator for the make-market combo flow.
+    Impact is NOT applied here; it is deferred to submit_market so the market
+    only reacts after the user has given a quote and a trade occurs.
+
+    Returns (side, price, combo_size, orig_side) where orig_side is the
+    customer's intended side BEFORE any price-flip normalisation.  submit_market
+    uses orig_side together with the fair_combo sign to derive the correct
+    stock-equivalent impact direction (see _apply_combo_impact)."""
     _clip_stock_fair(board)
     mult = float(np.random.choice(_COMBO_MULTIPLIERS))
     combo_size = int(round(board['stock_size'] * mult))
@@ -863,11 +1142,9 @@ def generate_customer_combo_price(board, strike):
         combo_size = int(round(combo_size / 10) * 10)
 
     side = _biased_side(board, f"{int(strike)} combo")
-    fair_combo = board['stock_num'] - strike + board['rc_num']
+    orig_side = side                               # save before potential flip
     side, price = _combo_customer_price(board, strike, side)
-    if (side == 'bid' and price > fair_combo) or (side == 'offer' and price < fair_combo):
-        _apply_combo_impact(board, combo_size, side)
-    return side, price, combo_size
+    return side, price, combo_size, orig_side
 
 
 def _apply_options_impact(board, opt_size, delta, side):
@@ -887,11 +1164,14 @@ def _apply_options_impact(board, opt_size, delta, side):
         board['stock_num'] = round_to_cent(board['stock_num'] - impact)
 
 
-def generate_options_market(board):
+def generate_options_market(board, apply_impact=True):
     """
     Generate a customer options market request for one of the two ITM options:
       - bw_strike call    price = implied_stock - strike + B/W
       - p_and_s_strike put  price = strike - implied_stock + P&S
+    When apply_impact=False (make-market flow) the stock fair is not moved;
+    impact is deferred to submit_options_market so the market only reacts after
+    the user gives a quote and the customer actually trades.
     """
     _clip_stock_fair(board)
     is_call = random.choice([True, False])
@@ -927,7 +1207,7 @@ def generate_options_market(board):
     # Edge in stock space scaled by |delta|, plus uniform noise
     k           = float(np.random.choice(_COMBO_K_LIST))
     option_edge = round_to_cent(k * half_spread * abs(delta))
-    noise       = round_to_cent(float(np.random.uniform(-0.02, 0.04)))
+    noise       = round_to_cent(float(np.random.uniform(-0.06, 0.02)))
     total_edge  = option_edge + noise
     price       = round_to_cent(fair - total_edge) if side == 'bid' else round_to_cent(fair + total_edge)
 
@@ -942,8 +1222,8 @@ def generate_options_market(board):
         price = abs(price)
         side = 'offer' if side == 'bid' else 'bid'
 
-    # Apply impact only when the order is aggressive vs fair
-    if (side == 'bid' and price > fair) or (side == 'offer' and price < fair):
+    # Apply impact only when aggressive and the caller wants immediate impact
+    if apply_impact and ((side == 'bid' and price > fair) or (side == 'offer' and price < fair)):
         _apply_options_impact(board, opt_size, delta, side)
 
     if side == 'offer':
@@ -1008,7 +1288,7 @@ def generate_otm_order_data(board):
     # Edge in stock space scaled by |delta|, plus uniform noise
     k           = float(np.random.choice(_OTM_K_LIST))
     option_edge = round_to_cent(k * half_spread * abs(delta))
-    noise       = round_to_cent(float(np.random.uniform(-0.02, 0.04)))
+    noise       = round_to_cent(float(np.random.uniform(-0.06, 0.02)))
     total_edge  = option_edge + noise
     price       = round_to_cent(fair - total_edge) if side == 'bid' else round_to_cent(fair + total_edge)
 
@@ -1041,7 +1321,7 @@ def generate_otm_order_data(board):
     }
 
 
-def generate_middle_options_market(board):
+def generate_middle_options_market(board, apply_impact=True):
     """
     Generate a customer market request for one of the six middle-strike options:
       - inside_low_strike  call/put  (K - tick)
@@ -1087,7 +1367,7 @@ def generate_middle_options_market(board):
     # Edge in stock space scaled by |delta|, plus uniform noise
     k           = float(np.random.choice(_MIDDLE_OPTIONS_K_LIST))
     option_edge = round_to_cent(k * half_spread * abs(delta))
-    noise       = round_to_cent(float(np.random.uniform(-0.02, 0.04)))
+    noise       = round_to_cent(float(np.random.uniform(-0.06, 0.02)))
     total_edge  = option_edge + noise
     price       = round_to_cent(fair - total_edge) if side == 'bid' else round_to_cent(fair + total_edge)
 
@@ -1102,8 +1382,8 @@ def generate_middle_options_market(board):
         price = abs(price)
         side  = 'offer' if side == 'bid' else 'bid'
 
-    # Apply impact only when the order is aggressive vs fair
-    if (side == 'bid' and price > fair) or (side == 'offer' and price < fair):
+    # Apply impact only when aggressive and the caller wants immediate impact
+    if apply_impact and ((side == 'bid' and price > fair) or (side == 'offer' and price < fair)):
         _apply_options_impact(board, opt_size, delta, side)
 
     if side == 'offer':
@@ -1126,11 +1406,13 @@ def generate_middle_options_market(board):
     }
 
 
-def generate_directed_option_order_data(board, strike_f, option_type, preferred_side):
+def generate_directed_option_order_data(board, strike_f, option_type, preferred_side,
+                                          apply_impact=True):
     """
     Generate a customer option order for any board strike with a preferred side.
     Uses delta-adjusted BS fair + edge pricing (same model as middle options).
     preferred_side is honoured with 85 % probability.
+    When apply_impact=False impact is deferred to the submit handler.
     """
     _clip_stock_fair(board)
     is_call = (option_type == 'call')
@@ -1176,7 +1458,7 @@ def generate_directed_option_order_data(board, strike_f, option_type, preferred_
     # Edge in stock space scaled by |delta|, plus uniform noise
     k           = float(np.random.choice(_MIDDLE_OPTIONS_K_LIST))
     option_edge = round_to_cent(k * half_spread * abs(delta))
-    noise       = round_to_cent(float(np.random.uniform(-0.02, 0.04)))
+    noise       = round_to_cent(float(np.random.uniform(-0.06, 0.02)))
     total_edge  = option_edge + noise
     price       = round_to_cent(fair - total_edge) if side == 'bid' else round_to_cent(fair + total_edge)
 
@@ -1189,7 +1471,7 @@ def generate_directed_option_order_data(board, strike_f, option_type, preferred_
         price = abs(price)
         side = 'offer' if side == 'bid' else 'bid'
 
-    if (side == 'bid' and price > fair) or (side == 'offer' and price < fair):
+    if apply_impact and ((side == 'bid' and price > fair) or (side == 'offer' and price < fair)):
         _apply_options_impact(board, opt_size, delta, side)
 
     option_label = f"{int(strike_f)} {option_type}"
@@ -1269,12 +1551,13 @@ def _spread_fair_delta_label(board, k1, k2, spread_type):
     return fair, net_delta, label
 
 
-def _generate_spread_data(board, spread_types=None, strike_pool=None):
+def _generate_spread_data(board, spread_types=None, strike_pool=None, apply_impact=True):
     """Core spread order generator shared by all spread market/order flows.
 
     spread_types: list of allowed spread kinds to draw from.  Defaults to all
     three: ['call_spread', 'put_spread', 'risk_reversal'].
     strike_pool: optional list of strikes to restrict pair selection.
+    When apply_impact=False impact is deferred to the submit handler.
     """
     if spread_types is None:
         spread_types = ['call_spread', 'put_spread', 'risk_reversal']
@@ -1304,7 +1587,7 @@ def _generate_spread_data(board, spread_types=None, strike_pool=None):
         price = abs(price)
         side  = 'offer' if side == 'bid' else 'bid'
 
-    if (side == 'bid' and price > fair) or (side == 'offer' and price < fair):
+    if apply_impact and ((side == 'bid' and price > fair) or (side == 'offer' and price < fair)):
         _apply_options_impact(board, opt_size, net_delta, side)
 
     speak = (f"Customer offers {opt_size} lots of {label} at {price}"
@@ -1429,8 +1712,12 @@ BOARD = generate_opening_board()
 
 @app.route("/board_params")
 def board_params():
+    with _board_lock:
+        dyn      = BOARD.get("dynamics", {})
+        fair_mid = dyn.get("fair_mid", BOARD["stock_num"])
     return jsonify({
         "stock_fair":      BOARD["stock_num"],
+        "fair_mid":        round(fair_mid, 2),
         "initial_fair":    BOARD["initial_stock_num"],
         "starting_size":   BOARD["stock_size"],
         "impact_function": BOARD["impact_function"],
@@ -1441,6 +1728,45 @@ def board_params():
         "initial_bid":     BOARD["initial_bid"],
         "initial_offer":   BOARD["initial_offer"],
     })
+
+@app.route("/set_drift", methods=["POST"])
+def set_drift():
+    """Adjust market movement speed live (0 = frozen, 1 = max) without resetting the board.
+
+    Uses exponential interpolation across three dynamics so that every part of
+    the scale feels meaningful:
+      tick_vol   : 0.001 → 2.0   (random-walk speed, ticks/√s)
+      drift_sigma: 0.0001 → 3.0  (OU drift innovation)
+      drift_alpha: 10.0 → 0.1    (mean-reversion; lower = longer-lasting trends)
+    At level=0.5 these land near the original random board defaults.
+    At level=1.0 the stock moves several ticks per second with persistent trends.
+    At level=0.0 the stock is completely frozen.
+    """
+    data  = request.get_json(silent=True) or {}
+    level = float(data.get("level", 0.5))
+    level = max(0.0, min(1.0, level))
+
+    # Exponential interpolation: param = base * (ratio ** level)
+    new_tick_vol    = 0.001  * (2000.0 ** level)   # 0.001 at 0 → 2.0 at 1
+    new_drift_sigma = 0.0001 * (30000.0 ** level)  # 0.0001 at 0 → 3.0 at 1
+    new_drift_alpha = 10.0   * (0.01   ** level)   # 10.0  at 0 → 0.1 at 1
+
+    with _board_lock:
+        dyn = BOARD.get("dynamics", {})
+        if dyn:
+            dyn["tick_vol"]    = new_tick_vol
+            dyn["drift_sigma"] = new_drift_sigma
+            dyn["drift_alpha"] = new_drift_alpha
+            if level == 0.0:
+                dyn["drift"] = 0.0   # kill any accumulated drift immediately
+
+    return jsonify({
+        "status":      "ok",
+        "tick_vol":    round(new_tick_vol, 4),
+        "drift_sigma": round(new_drift_sigma, 4),
+        "drift_alpha": round(new_drift_alpha, 4),
+    })
+
 
 @app.route("/speak", methods=["POST"])
 def speak():
@@ -1652,7 +1978,8 @@ def index():
         strikes=BOARD["strikes"],
         info=BOARD["info"],
         highlight=BOARD["highlight"],
-        stock_size=BOARD["stock_size"]
+        stock_size=BOARD["stock_size"],
+        stock_ref=BOARD["initial_stock_num"]
     )
 
 @app.route("/reveal")
@@ -1732,12 +2059,15 @@ def new_board():
 @app.route("/make_market")
 def make_market():
     strike = random.choice(BOARD['strikes'])
-    side, customer_price, size = generate_customer_combo_price(BOARD, strike)
+    side, customer_price, size, orig_side = generate_customer_combo_price(BOARD, strike)
+    fair_combo = BOARD["stock_num"] - float(strike) + BOARD["rc_num"]
 
     order = {
-        "strike": strike,
-        "size": size,
-        "side": side,
+        "strike":       strike,
+        "size":         size,
+        "side":         side,
+        "orig_side":    orig_side,           # pre-flip side for correct impact direction
+        "is_puts_over": fair_combo < 0,      # tells submit_market to invert direction
         "customer_price": customer_price,
         "sentence": f"{size}x {int(strike)} combo – make a market",
         "announce": f"{size} lots of {int(strike)} combos.",
@@ -1759,6 +2089,20 @@ def submit_market():
     customer_side = data["side"]
     customer_price = float(data["customer_price"])
 
+    # Derive stock_dir (bullish/bearish signal for _apply_combo_impact) from the
+    # pre-flip original side and the fair_combo sign (passed from make_market).
+    # Must use orig_side, not customer_side: _combo_customer_price only flips when
+    # price < 0, so a barely puts-over combo may not flip, leaving customer_side
+    # equal to orig_side even in puts-over territory.
+    #
+    # calls-over (is_puts_over=False):  stock_dir = orig_side (bid→UP, offer→DOWN)
+    # puts-over  (is_puts_over=True):   stock_dir = INVERTED orig_side
+    #   orig bid  (long put/short call)  = bearish → stock_dir='offer' → stock DOWN
+    #   orig offer (short put/long call) = bullish → stock_dir='bid'   → stock UP
+    orig_side    = data.get("orig_side", customer_side)
+    is_puts_over = data.get("is_puts_over", False)
+    stock_dir    = ('offer' if orig_side == 'bid' else 'bid') if is_puts_over else orig_side
+
     # ---------- FAIR VALUE ----------
     fair_combo = BOARD["stock_num"] - strike + BOARD["rc_num"]
 
@@ -1774,6 +2118,7 @@ def submit_market():
     if customer_side == "bid":
         # Customer wants to buy
         if offer <= customer_price:
+            _apply_combo_impact(BOARD, int(size), stock_dir)
             return jsonify({
                 "type": "trade",
                 "side": "offer",
@@ -1788,6 +2133,7 @@ def submit_market():
     else:
         # Customer wants to sell
         if bid >= customer_price:
+            _apply_combo_impact(BOARD, int(size), stock_dir)
             return jsonify({
                 "type": "trade",
                 "side": "bid",
@@ -1815,6 +2161,10 @@ def submit_market():
     else:
         implied_stock = round(float(strike) - customer_price - BOARD['rc_num'], 2)
 
+    # Use stock_dir (not customer_side) for the resting-order floor/ceiling so
+    # a puts-over bid correctly registers as a ceiling, not a floor.
+    _add_customer_resting_order(BOARD, implied_stock, stock_dir, int(size))
+
     return jsonify({
         "type": "order",
         "strike": strike,
@@ -1829,7 +2179,7 @@ def submit_market():
 
 @app.route("/make_options_market")
 def make_options_market():
-    order = generate_options_market(BOARD)
+    order = generate_options_market(BOARD, apply_impact=False)
     order["announce"] = f"{order['size']} lots of {order['option_label']}."
     return jsonify(order)
 
@@ -1867,8 +2217,17 @@ def submit_options_market():
                 # OTM put at bw_strike (price ≈ bw - rc, stock-independent)
                 return round(BOARD["stock_num"], 2)
 
+    # Look up delta for impact (negative for puts)
+    _dm = _get_strike_delta_map(BOARD)
+    _opt_delta = 0.5
+    for _k, _v in _dm.items():
+        if abs(_k - strike_f) < 0.01:
+            _opt_delta = _v.get('call' if is_call else 'put', 0.5)
+            break
+
     if customer_side == "bid":
         if offer <= customer_price:
+            _apply_options_impact(BOARD, int(size), _opt_delta, customer_side)
             return jsonify({
                 "type":          "trade",
                 "side":          "offer",
@@ -1882,6 +2241,7 @@ def submit_options_market():
             })
     else:
         if bid >= customer_price:
+            _apply_options_impact(BOARD, int(size), _opt_delta, customer_side)
             return jsonify({
                 "type":          "trade",
                 "side":          "bid",
@@ -1905,6 +2265,12 @@ def submit_options_market():
 
     opt_implied_stock = _opt_implied(customer_price)
 
+    # Register resting order: delta sign × side sign gives the stock-equivalent direction
+    _signed_d = _opt_delta * (1.0 if customer_side == 'bid' else -1.0)
+    _add_customer_resting_order(BOARD, opt_implied_stock,
+                                'bid' if _signed_d > 0 else 'offer',
+                                int(round(int(size) * abs(_opt_delta))))
+
     return jsonify({
         "type":          "order",
         "strike":        strike,
@@ -1923,7 +2289,7 @@ def submit_options_market():
 
 @app.route("/make_middle_options_market")
 def make_middle_options_market():
-    order = generate_middle_options_market(BOARD)
+    order = generate_middle_options_market(BOARD, apply_impact=False)
     order["announce"] = f"{order['size']} lots of {order['option_label']}."
     return jsonify(order)
 
@@ -1962,6 +2328,7 @@ def submit_middle_options_market():
 
     if customer_side == "bid":
         if offer <= customer_price:
+            _apply_options_impact(BOARD, int(size), delta, customer_side)
             return jsonify({
                 "type":          "trade",
                 "side":          "offer",
@@ -1975,6 +2342,7 @@ def submit_middle_options_market():
             })
     else:
         if bid >= customer_price:
+            _apply_options_impact(BOARD, int(size), delta, customer_side)
             return jsonify({
                 "type":          "trade",
                 "side":          "bid",
@@ -1995,12 +2363,18 @@ def submit_middle_options_market():
         speak    = f"Customer offers {size} lots of {option_label} at {customer_price}"
         sentence = f"{size}x {option_label} offered @ {customer_price}"
 
+    _mid_implied = _opt_implied(customer_price)
+    _signed_d    = delta * (1.0 if customer_side == 'bid' else -1.0)
+    _add_customer_resting_order(BOARD, _mid_implied,
+                                'bid' if _signed_d > 0 else 'offer',
+                                int(round(int(size) * abs(delta))))
+
     return jsonify({
         "type":          "order",
         "strike":        strike,
         "option_label":  option_label,
         "price":         customer_price,
-        "implied_stock": _opt_implied(customer_price),
+        "implied_stock": _mid_implied,
         "size":          size,
         "side":          customer_side,
         "sentence":      sentence,
@@ -2056,7 +2430,8 @@ def make_directed_options_market():
     if not any(abs(strike_f - s) < 0.01 for s in BOARD['strikes']):
         return jsonify({"error": "Strike not on board"}), 400
 
-    order = generate_directed_option_order_data(BOARD, strike_f, option_type, preferred_side)
+    order = generate_directed_option_order_data(BOARD, strike_f, option_type, preferred_side,
+                                                apply_impact=False)
     order["announce"] = f"{order['size']} lots of {order['option_label']}."
     return jsonify(order)
 
@@ -2078,20 +2453,22 @@ def generate_spread_order():
 
 @app.route("/make_spread_market")
 def make_spread_market():
-    order = _generate_spread_data(BOARD)
+    order = _generate_spread_data(BOARD, apply_impact=False)
     return jsonify(order)
 
 
 @app.route("/make_rr_market")
 def make_rr_market():
     middle_strikes = BOARD['strikes'][1:4]  # inside_low, ATM, inside_high
-    order = _generate_spread_data(BOARD, spread_types=['risk_reversal'], strike_pool=middle_strikes)
+    order = _generate_spread_data(BOARD, spread_types=['risk_reversal'],
+                                  strike_pool=middle_strikes, apply_impact=False)
     return jsonify(order)
 
 
 @app.route("/make_cs_ps_market")
 def make_cs_ps_market():
-    order = _generate_spread_data(BOARD, spread_types=['call_spread', 'put_spread'])
+    order = _generate_spread_data(BOARD, spread_types=['call_spread', 'put_spread'],
+                                  apply_impact=False)
     return jsonify(order)
 
 
@@ -2117,6 +2494,7 @@ def submit_spread_market():
 
     if customer_side == "bid":
         if offer <= customer_price:
+            _apply_options_impact(BOARD, int(size), net_delta, customer_side)
             return jsonify({
                 "type":          "trade",
                 "side":          "offer",
@@ -2129,6 +2507,7 @@ def submit_spread_market():
             })
     else:
         if bid >= customer_price:
+            _apply_options_impact(BOARD, int(size), net_delta, customer_side)
             return jsonify({
                 "type":          "trade",
                 "side":          "bid",
@@ -2147,6 +2526,12 @@ def submit_spread_market():
         speak    = f"Customer offers {size} lots of {spread_label} at {customer_price}"
         sentence = f"{size}x {spread_label} offered @ {customer_price}"
 
+    _sprd_implied = _implied(customer_price)
+    _signed_d     = net_delta * (1.0 if customer_side == 'bid' else -1.0)
+    _add_customer_resting_order(BOARD, _sprd_implied,
+                                'bid' if _signed_d > 0 else 'offer',
+                                int(round(int(size) * abs(net_delta))))
+
     return jsonify({
         "type":           "order",
         "k1":             k1,
@@ -2155,7 +2540,7 @@ def submit_spread_market():
         "spread_label":   spread_label,
         "price":          customer_price,
         "customer_price": customer_price,
-        "implied_stock":  _implied(customer_price),
+        "implied_stock":  _sprd_implied,
         "size":           size,
         "side":           customer_side,
         "sentence":       sentence,
@@ -2174,7 +2559,7 @@ if __name__ == "__main__":
     t = threading.Thread(target=speech_worker, daemon=True)
     t.start()
 
-    # Market dynamics worker (updates ladder every 500 ms)
+    # Market dynamics worker (updates ladder every 50 ms)
     t_market = threading.Thread(target=_market_update_worker, daemon=True)
     t_market.start()
 

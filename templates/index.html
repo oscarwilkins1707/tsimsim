@@ -34,6 +34,12 @@
             <button class="decision-time-btn" onclick="setStockFair()">Set</button>
         </div>
         <div id="stock-fair-status" class="decision-time-status">Actual fair</div>
+        <label class="decision-time-label" style="margin-top:6px;">Stock drift</label>
+        <div class="decision-time-row">
+            <input id="drift-slider" type="range" min="0" max="100" value="75"
+                   style="flex:1;cursor:pointer;" oninput="onDriftSlider(this.value)">
+        </div>
+        <div id="drift-status" class="decision-time-status">Very high</div>
     </div>
 
     <div class="action-buttons">
@@ -69,6 +75,9 @@
     <!-- ===== LEFT COLUMN: spread/straddle info ===== -->
     <div class="main-left">
         <div class="info-panel">
+            <div class="info-line info-line-stockref">
+                <span class="info-text info-text-stockref">stock ref: {{ "%.2f"|format(stock_ref) }}</span>
+            </div>
             <div class="info-line">
                 <button class="info-toggle-btn" onclick="toggleInfoLine(this)">hide</button>
                 <span class="info-text">{{ rc }}</span>
@@ -203,6 +212,7 @@
 let pendingMarket = null;
 let showImpliedStock = false;
 const stockSize = {{ stock_size }};
+const stockRef = {{ stock_ref }};
 let decisionTime = null;   // null = no constraint
 let audioMode = false;
 let tradeCounter = 0;
@@ -303,6 +313,18 @@ function setStockFair() {
             if (answersVisible) showAnswers();
             if (deltasVisible)  showDeltas();
         });
+}
+
+function onDriftSlider(val) {
+    const level = parseInt(val) / 100;
+    const labels = ["Frozen", "Very low", "Low", "Medium", "High", "Very high", "Max"];
+    const idx = Math.round(level * (labels.length - 1));
+    document.getElementById("drift-status").textContent = labels[idx];
+    fetch("/set_drift", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({level: level})
+    });
 }
 
 function startModalTimer() {
@@ -446,11 +468,10 @@ function lockOptionsQuotes() {
         });
     }
 
-    fetch("/reveal")
+    fetch(`/reveal_at?stock=${stockRef}`)
         .then(r => r.json())
         .then(data => {
-            cachedAnswers = data;
-            processLock(cachedAnswers);
+            processLock(data.answers);
         });
 }
 
@@ -504,7 +525,8 @@ function toggleFair() {
             .then(r => r.json())
             .then(p => {
                 panel.innerHTML = [
-                    `Stock fair: ${p.stock_fair.toFixed(2)}`,
+                    `True stock fair (stock_num): ${p.stock_fair.toFixed(2)}`,
+                    `Apparent stock fair (fair_mid): ${p.fair_mid.toFixed(2)}`,
                     `Initial fair: ${p.initial_fair.toFixed(2)}`,
                     `Starting size: ${p.starting_size}`,
                     `Impact function: ${p.impact_function.toFixed(4)}`,
@@ -1227,6 +1249,24 @@ function updateStock(/* stock */) {
 /* ================= STOCK LADDER ================= */
 
 let ladderMsgTimer = null;
+let shiftActive = false;
+
+// Shift key enables trading mode: freeze price rows and turn them red
+document.addEventListener("keydown", function (e) {
+    if (e.key === "Shift" && !shiftActive) {
+        shiftActive = true;
+        const panel = document.querySelector(".right-ladder");
+        if (panel) panel.classList.add("shift-trading");
+    }
+});
+
+document.addEventListener("keyup", function (e) {
+    if (e.key === "Shift") {
+        shiftActive = false;
+        const panel = document.querySelector(".right-ladder");
+        if (panel) panel.classList.remove("shift-trading");
+    }
+});
 
 function fetchLadder() {
     fetch("/get_ladder")
@@ -1238,10 +1278,33 @@ function fetchLadder() {
 function renderLadder(data) {
     const tbody = document.getElementById("ladder-body");
     if (!tbody) return;
+
+    // While Shift is held: freeze row positions, only refresh liquidity in-place
+    if (shiftActive && tbody.children.length > 0) {
+        const rowMap = {};
+        Array.from(tbody.querySelectorAll("tr[data-price]")).forEach(tr => {
+            rowMap[tr.dataset.price] = tr;
+        });
+        data.rows.forEach(row => {
+            const tr = rowMap[String(row.price)];
+            if (!tr) return;
+            // cells: 0=filledBuy 1=youBuy 2=bid 3=price 4=offer 5=youSell 6=filledSell
+            tr.cells[0].textContent = row.filled_buy  != null ? row.filled_buy.toLocaleString()  : "";
+            tr.cells[1].textContent = row.you_buy     != null ? row.you_buy.toLocaleString()     : "";
+            tr.cells[2].textContent = row.bid         != null ? row.bid.toLocaleString()         : "";
+            tr.cells[4].textContent = row.offer       != null ? row.offer.toLocaleString()       : "";
+            tr.cells[5].textContent = row.you_sell    != null ? row.you_sell.toLocaleString()    : "";
+            tr.cells[6].textContent = row.filled_sell != null ? row.filled_sell.toLocaleString() : "";
+        });
+        return;
+    }
+
+    // Full re-render when Shift is not held
     tbody.innerHTML = "";
 
     data.rows.forEach(row => {
         const tr = document.createElement("tr");
+        tr.dataset.price = row.price;
 
         if (row.is_mid) {
             tr.className = "ladder-mid";
@@ -1274,12 +1337,16 @@ function renderLadder(data) {
     });
 
     tbody.querySelectorAll(".lc-you-buy").forEach(cell => {
-        cell.addEventListener("dblclick", function () {
+        cell.addEventListener("dblclick", function (e) {
+            e.preventDefault();
+            if (!shiftActive) return;
             placeLadderOrder("buy", parseFloat(this.dataset.price));
         });
     });
     tbody.querySelectorAll(".lc-you-sell").forEach(cell => {
-        cell.addEventListener("dblclick", function () {
+        cell.addEventListener("dblclick", function (e) {
+            e.preventDefault();
+            if (!shiftActive) return;
             placeLadderOrder("sell", parseFloat(this.dataset.price));
         });
     });
@@ -1322,7 +1389,7 @@ function showLadderMessage(msg) {
 }
 
 fetchLadder();
-setInterval(fetchLadder, 1000);
+setInterval(fetchLadder, 100);
 
 /* ================= OPENING ORDER ================= */
 

@@ -276,6 +276,19 @@ body {
     visibility: hidden;
 }
 
+.info-line-stockref {
+    margin-bottom: 4px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid #ccc;
+}
+
+.info-text-stockref {
+    font-weight: 600;
+    color: #1a5c99;
+    font-size: 13px;
+    letter-spacing: 0.02em;
+}
+
 /* ===== STOCK LADDER ===== */
 
 .ladder-panel {
@@ -342,12 +355,17 @@ body {
     line-height: 20px;
     white-space: nowrap;
     overflow: hidden;
+    user-select: none;
 }
 
 /* Row backgrounds — unified alternating pattern across all row types */
 .stock-ladder tbody tr:nth-child(odd)  { background: #ffffff; }
 .stock-ladder tbody tr:nth-child(even) { background: #e8f5e8; }
 .stock-ladder tr.ladder-mid            { background: #fffacd !important; }
+
+/* Shift-trading mode: even rows turn red to signal trading is enabled */
+.shift-trading .stock-ladder tbody tr:nth-child(even) { background: #fde8e8; }
+.shift-trading .stock-ladder tr.ladder-mid            { background: #fffacd !important; }
 
 /* Column widths (7 columns, total ~600px) */
 .lh-filled, .lc-filled-buy,  .lc-filled-sell { width: 84px; }
