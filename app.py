@@ -276,6 +276,28 @@ def round_to_cent(value):
     return round(round(value / MIN_TICK) * MIN_TICK, 2)
 
 
+def _ref_adj(data, delta):
+    """Delta-adjust bid/offer relative to a user-supplied reference stock price.
+
+    If the user quotes with ref_fair=S0, we adjust their bid and offer by
+    delta * (current_fair_mid - S0) so the quote is re-centred on the current
+    stock mid at submission time.
+
+    Returns (adjustment, ref_fair_used).  Both are 0.0/None when ref_fair is
+    absent or cannot be parsed.
+    """
+    raw = data.get("ref_fair")
+    if raw is None or raw == "":
+        return 0.0, None
+    try:
+        ref_fair = float(raw)
+    except (ValueError, TypeError):
+        return 0.0, None
+    fair_mid = BOARD["dynamics"]["fair_mid"]
+    adj = round_to_cent(delta * (fair_mid - ref_fair))
+    return adj, ref_fair
+
+
 # ─── Stock ladder helpers ──────────────────────────────────────────────────────
 
 def _sparse_level_size():
@@ -2157,6 +2179,12 @@ def submit_market():
     strike = data["strike"]
     size = data["size"]
 
+    # Delta-adjust from reference stock fair if provided (combo delta ≈ 1.0)
+    _orig_bid, _orig_offer = bid, offer
+    _adj, _ref_used = _ref_adj(data, 1.0)
+    bid   = round_to_cent(bid   + _adj)
+    offer = round_to_cent(offer + _adj)
+
     customer_side = data["side"]
     customer_price = float(data["customer_price"])
 
@@ -2186,14 +2214,20 @@ def submit_market():
         else:
             return round(float(strike) - trade_price - BOARD["rc_num"], 2)
 
+    # Pre-impact implied stock from customer's order price (used for bounding below)
+    _cust_implied_pre = _combo_implied(customer_price)
+
     if customer_side == "bid":
         # Customer wants to buy
         if offer <= customer_price:
             _apply_combo_impact(BOARD, int(size), stock_dir)
+            BOARD["stock_num"] = round_to_cent(min(BOARD["stock_num"], _cust_implied_pre))
             return jsonify({
                 "type": "trade",
                 "side": "offer",
                 "price": offer,
+                "quoted_price": _orig_offer,
+                "ref_fair": _ref_used,
                 "strike": strike,
                 "size": size,
                 "speak": f"Customer buys {size} at {offer}",
@@ -2205,10 +2239,13 @@ def submit_market():
         # Customer wants to sell
         if bid >= customer_price:
             _apply_combo_impact(BOARD, int(size), stock_dir)
+            BOARD["stock_num"] = round_to_cent(max(BOARD["stock_num"], _cust_implied_pre))
             return jsonify({
                 "type": "trade",
                 "side": "bid",
                 "price": bid,
+                "quoted_price": _orig_bid,
+                "ref_fair": _ref_used,
                 "strike": strike,
                 "size": size,
                 "speak": f"Customer sells {size} at {bid}",
@@ -2296,13 +2333,25 @@ def submit_options_market():
             _opt_delta = _v.get('call' if is_call else 'put', 0.5)
             break
 
+    # Delta-adjust from reference stock fair if provided
+    _orig_bid, _orig_offer = bid, offer
+    _adj, _ref_used = _ref_adj(data, _opt_delta)
+    bid   = round_to_cent(bid   + _adj)
+    offer = round_to_cent(offer + _adj)
+
+    # Pre-impact implied stock from customer's order price (used for bounding below)
+    _cust_implied_pre = _opt_implied(customer_price)
+
     if customer_side == "bid":
         if offer <= customer_price:
             _apply_options_impact(BOARD, int(size), _opt_delta, customer_side)
+            BOARD["stock_num"] = round_to_cent(min(BOARD["stock_num"], _cust_implied_pre))
             return jsonify({
                 "type":          "trade",
                 "side":          "offer",
                 "price":         offer,
+                "quoted_price":  _orig_offer,
+                "ref_fair":      _ref_used,
                 "strike":        strike,
                 "size":          size,
                 "option_label":  option_label,
@@ -2313,10 +2362,13 @@ def submit_options_market():
     else:
         if bid >= customer_price:
             _apply_options_impact(BOARD, int(size), _opt_delta, customer_side)
+            BOARD["stock_num"] = round_to_cent(max(BOARD["stock_num"], _cust_implied_pre))
             return jsonify({
                 "type":          "trade",
                 "side":          "bid",
                 "price":         bid,
+                "quoted_price":  _orig_bid,
+                "ref_fair":      _ref_used,
                 "strike":        strike,
                 "size":          size,
                 "option_label":  option_label,
@@ -2392,18 +2444,30 @@ def submit_middle_options_market():
     fair           = float(data["fair"])
     delta          = float(data["delta"])
 
+    # Delta-adjust from reference stock fair if provided
+    _orig_bid, _orig_offer = bid, offer
+    _adj, _ref_used = _ref_adj(data, delta)
+    bid   = round_to_cent(bid   + _adj)
+    offer = round_to_cent(offer + _adj)
+
     def _opt_implied(trade_price):
         if abs(delta) > 1e-6:
             return round(BOARD["stock_num"] + (trade_price - fair) / delta, 2)
         return round(BOARD["stock_num"], 2)
 
+    # Pre-impact implied stock from customer's order price (used for bounding below)
+    _cust_implied_pre = _opt_implied(customer_price)
+
     if customer_side == "bid":
         if offer <= customer_price:
             _apply_options_impact(BOARD, int(size), delta, customer_side)
+            BOARD["stock_num"] = round_to_cent(min(BOARD["stock_num"], _cust_implied_pre))
             return jsonify({
                 "type":          "trade",
                 "side":          "offer",
                 "price":         offer,
+                "quoted_price":  _orig_offer,
+                "ref_fair":      _ref_used,
                 "strike":        strike,
                 "size":          size,
                 "option_label":  option_label,
@@ -2414,10 +2478,13 @@ def submit_middle_options_market():
     else:
         if bid >= customer_price:
             _apply_options_impact(BOARD, int(size), delta, customer_side)
+            BOARD["stock_num"] = round_to_cent(max(BOARD["stock_num"], _cust_implied_pre))
             return jsonify({
                 "type":          "trade",
                 "side":          "bid",
                 "price":         bid,
+                "quoted_price":  _orig_bid,
+                "ref_fair":      _ref_used,
                 "strike":        strike,
                 "size":          size,
                 "option_label":  option_label,
@@ -2560,18 +2627,30 @@ def submit_spread_market():
     fair           = float(data["fair"])
     net_delta      = float(data["net_delta"])
 
+    # Delta-adjust from reference stock fair if provided
+    _orig_bid, _orig_offer = bid, offer
+    _adj, _ref_used = _ref_adj(data, net_delta)
+    bid   = round_to_cent(bid   + _adj)
+    offer = round_to_cent(offer + _adj)
+
     def _implied(trade_price):
         if abs(net_delta) > 1e-6:
             return round(BOARD["stock_num"] + (trade_price - fair) / net_delta, 2)
         return round(BOARD["stock_num"], 2)
 
+    # Pre-impact implied stock from customer's order price (used for bounding below)
+    _cust_implied_pre = _implied(customer_price)
+
     if customer_side == "bid":
         if offer <= customer_price:
             _apply_options_impact(BOARD, int(size), net_delta, customer_side)
+            BOARD["stock_num"] = round_to_cent(min(BOARD["stock_num"], _cust_implied_pre))
             return jsonify({
                 "type":          "trade",
                 "side":          "offer",
                 "price":         offer,
+                "quoted_price":  _orig_offer,
+                "ref_fair":      _ref_used,
                 "size":          size,
                 "spread_label":  spread_label,
                 "speak":         f"Customer buys {size} {spread_label} at {offer}",
@@ -2581,10 +2660,13 @@ def submit_spread_market():
     else:
         if bid >= customer_price:
             _apply_options_impact(BOARD, int(size), net_delta, customer_side)
+            BOARD["stock_num"] = round_to_cent(max(BOARD["stock_num"], _cust_implied_pre))
             return jsonify({
                 "type":          "trade",
                 "side":          "bid",
                 "price":         bid,
+                "quoted_price":  _orig_bid,
+                "ref_fair":      _ref_used,
                 "size":          size,
                 "spread_label":  spread_label,
                 "speak":         f"Customer sells {size} {spread_label} at {bid}",

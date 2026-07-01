@@ -42,6 +42,10 @@
                 <label class="quoting-label">Offer</label>
                 <input id="offer-input" class="quoting-input" type="number" step="0.01" placeholder="0.00">
             </div>
+            <div class="quoting-row">
+                <label class="quoting-label" title="Quote relative to this stock price; bid/offer are delta-adjusted to the current mid at submission">Ref S</label>
+                <input id="ref-fair-input" class="quoting-input quoting-input--ref" type="number" step="0.01" placeholder="optional">
+            </div>
             <div class="quoting-submit-row">
                 <button class="quoting-submit-btn" onclick="submitMarket()">Submit</button>
                 <span id="modal-timer" class="modal-timer"></span>
@@ -636,8 +640,9 @@ function openMarketModal(order, title) {
     pendingMarket = order;
     const qw = document.getElementById("quoting-window");
     document.getElementById("quoting-title").textContent = title || "Make a market";
-    document.getElementById("bid-input").value   = "";
-    document.getElementById("offer-input").value = "";
+    document.getElementById("bid-input").value       = "";
+    document.getElementById("offer-input").value     = "";
+    document.getElementById("ref-fair-input").value  = "";
     document.getElementById("quoting-inputs").style.display = "";
     qw.classList.remove("quoting-window--idle", "quoting-window--flashing");
     qw.classList.add("quoting-window--active");
@@ -747,6 +752,7 @@ function submitMarket() {
     clearModalTimer();
     const bid      = document.getElementById("bid-input").value;
     const offer    = document.getElementById("offer-input").value;
+    const ref_fair = document.getElementById("ref-fair-input").value.trim() || null;
     const orderKind = pendingMarket.order_kind;
     const isOptions = orderKind === "options" || orderKind === "middle_options";
     const endpoint  = orderKind === "middle_options" ? "/submit_middle_options_market"
@@ -757,7 +763,7 @@ function submitMarket() {
     fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...pendingMarket, bid, offer })
+        body: JSON.stringify({ ...pendingMarket, bid, offer, ref_fair })
     })
     .then(r => r.json())
     .then(result => {
@@ -770,13 +776,16 @@ function submitMarket() {
 
         if (result.type === "trade") {
             speakIfEnabled("trade: " + result.speak);
-            const sideWord = result.side === "bid" ? "sold" : "bought";
+            const sideWord   = result.side === "bid" ? "sold" : "bought";
+            const dispPrice  = result.ref_fair != null
+                ? `${parseFloat(result.quoted_price).toFixed(2)} ref ${parseFloat(result.ref_fair).toFixed(2)}`
+                : parseFloat(result.price).toFixed(2);
             if (isOptions) {
-                addTapeEntry(`OPT: Customer ${sideWord} ${result.size}x ${result.option_label} @ ${parseFloat(result.price).toFixed(2)}`, result.implied_stock);
+                addTapeEntry(`OPT: Customer ${sideWord} ${result.size}x ${result.option_label} @ ${dispPrice}`, result.implied_stock);
             } else if (isSpread(result.order_kind) || result.spread_label) {
-                addTapeEntry(`SPREAD: Customer ${sideWord} ${result.size}x ${result.spread_label} @ ${parseFloat(result.price).toFixed(2)}`, result.implied_stock);
+                addTapeEntry(`SPREAD: Customer ${sideWord} ${result.size}x ${result.spread_label} @ ${dispPrice}`, result.implied_stock);
             } else {
-                addTapeEntry(`COMBO: Customer ${sideWord} ${result.size}x ${result.strike} combo @ ${parseFloat(result.price).toFixed(2)}`, result.implied_stock);
+                addTapeEntry(`COMBO: Customer ${sideWord} ${result.size}x ${result.strike} combo @ ${dispPrice}`, result.implied_stock);
             }
             return;
         }

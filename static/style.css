@@ -192,6 +192,12 @@ body {
     width: 0;
 }
 
+.quoting-input--ref {
+    font-style: italic;
+    color: #555;
+    border-style: dashed;
+}
+
 .quoting-submit-row {
     display: flex;
     align-items: center;
