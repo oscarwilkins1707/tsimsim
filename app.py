@@ -564,9 +564,10 @@ def _apply_market_update(board):
     board["stock_num"] += drift_delta   # hidden fair always drifts at full speed
 
     # Automatic convergence of the quoted price toward the hidden fair.
-    # Rate 0.05/s → half-life ~14 s; the market visibly re-centres within ~30 s.
+    # Rate 0.01/s → half-life ~69 s; first visible tick appears 5–20 s after an
+    # options impact depending on gap size, giving the user a window to hedge.
     gap = board["stock_num"] - dyn["fair_mid"]
-    dyn["fair_mid"] += gap * 0.05 * dt
+    dyn["fair_mid"] += gap * 0.01 * dt
 
     new_fair      = dyn["fair_mid"]
     half_spread   = dyn["half_spread"]
@@ -953,6 +954,9 @@ _COMBO_K_LIST = [-4.0, -3.0, -2.5, -2.0, -1.8, -1.5, -1.5, -1.3, -1.2, -1.1,
 # place a bid below fair / offer above fair, worsening the market.
 _OTM_K_LIST   = [-3.5, -2.5, -2.0, -1.8, -1.5, -1.5, -1.3, -1.2, -1.1, -1.0,
                  -0.9, -0.9, -0.8, -0.7, -0.6, -0.5, -0.3, -0.2, -0.1,  0.0]
+# Minimum effective half-spread used as the floor when computing customer edge.
+# Prevents near-zero spreads from collapsing aggressiveness to negligible sizes.
+_MIN_HALF_SPREAD_FOR_EDGE = 0.05
 # Middle-strike options (K±tick, ATM): 75 % aggressive / 25 % passive.
 # 15 negative + 5 positive = 20 values. Magnitudes kept moderate (max -1.5).
 _MIDDLE_OPTIONS_K_LIST = [-1.5, -1.2, -1.1, -1.0, -0.9, -0.9, -0.8, -0.7,
@@ -1034,7 +1038,7 @@ def _combo_customer_price(board, strike, side):
     """
     half_spread = max(
         (board['stock_spread']['offer'] - board['stock_spread']['bid']) / 2.0,
-        MIN_TICK
+        _MIN_HALF_SPREAD_FOR_EDGE
     )
     k = float(np.random.choice(_COMBO_K_LIST)) + np.random.normal(loc=-0.3, scale=0.15)
     edge = round_to_cent(k * half_spread)
@@ -1123,6 +1127,13 @@ def generate_combo_order(board):
         implied_stock = strike + combo_price - board['rc_num']
         implied_side = side
 
+    # Bound stock fair by the implied stock for aggressive combo orders.
+    if _aggressive:
+        if implied_side == 'bid':
+            board['stock_num'] = round_to_cent(min(board['stock_num'], implied_stock))
+        else:
+            board['stock_num'] = round_to_cent(max(board['stock_num'], implied_stock))
+
     if side == 'offer':
         speak = f"Customer offers {combo_size} lots of {int(strike)} combos at {combo_price}"
     else:
@@ -1210,14 +1221,17 @@ def generate_options_market(board, apply_impact=True):
 
     half_spread = max(
         (board['stock_spread']['offer'] - board['stock_spread']['bid']) / 2.0,
-        MIN_TICK
+        _MIN_HALF_SPREAD_FOR_EDGE
     )
 
-    # ITM fair via parity (delta ≈ ±1)
+    # Fair via delta approximation anchored to BS open price (which was derived from P&S / B/W)
+    stock_move = board['stock_num'] - board['initial_stock_num']
     if is_call:
-        fair = round_to_cent(board['stock_num'] - strike + board['bw'])
+        bs_fair = board['answers'][board['bw_strike']]['call']
+        fair = max(round_to_cent(bs_fair + delta * stock_move), MIN_TICK)
     else:
-        fair = round_to_cent(strike - board['stock_num'] + board['p_and_s'])
+        bs_fair = board['answers'][board['p_and_s_strike']]['put']
+        fair = max(round_to_cent(bs_fair + delta * stock_move), MIN_TICK)
 
     # Edge in stock space scaled by |delta|, plus uniform noise
     k           = float(np.random.choice(_COMBO_K_LIST))
@@ -1240,6 +1254,12 @@ def generate_options_market(board, apply_impact=True):
     # Apply impact only when aggressive and the caller wants immediate impact
     if apply_impact and ((side == 'bid' and price > fair) or (side == 'offer' and price < fair)):
         _apply_options_impact(board, opt_size, delta, side)
+        # Bound stock fair by the implied stock so an aggressive order never
+        # moves the fair further than the customer's price signals.
+        if side == 'bid':
+            board['stock_num'] = round_to_cent(min(board['stock_num'], implied_stock))
+        else:
+            board['stock_num'] = round_to_cent(max(board['stock_num'], implied_stock))
 
     if side == 'offer':
         speak = f"Customer offers {opt_size} lots of {option_label} at {price}"
@@ -1289,7 +1309,7 @@ def generate_otm_order_data(board):
 
     half_spread = max(
         (board['stock_spread']['offer'] - board['stock_spread']['bid']) / 2.0,
-        MIN_TICK
+        _MIN_HALF_SPREAD_FOR_EDGE
     )
     # OTM: delta-adjusted fair (BS price at open + delta × stock move)
     stock_move = board['stock_num'] - board['initial_stock_num']
@@ -1307,7 +1327,11 @@ def generate_otm_order_data(board):
     total_edge  = option_edge + noise
     price       = round_to_cent(fair - total_edge) if side == 'bid' else round_to_cent(fair + total_edge)
 
-    implied_stock = round(board['stock_num'], 2)
+    # Recover implied stock via delta approximation (pre-flip, pre-impact)
+    if abs(delta) > 1e-6:
+        implied_stock = round_to_cent(board['stock_num'] + (price - fair) / delta)
+    else:
+        implied_stock = round_to_cent(board['stock_num'])
 
     # Normalise: flip side if price goes negative
     if price < 0:
@@ -1317,6 +1341,12 @@ def generate_otm_order_data(board):
     # Apply impact only when the order is aggressive vs fair
     if (side == 'bid' and price > fair) or (side == 'offer' and price < fair):
         _apply_options_impact(board, opt_size, delta, side)
+        # Bound stock fair by the implied stock so an aggressive order never
+        # moves the fair further than the customer's price signals.
+        if side == 'bid':
+            board['stock_num'] = round_to_cent(min(board['stock_num'], implied_stock))
+        else:
+            board['stock_num'] = round_to_cent(max(board['stock_num'], implied_stock))
 
     if side == 'offer':
         speak = f"Customer offers {opt_size} lots of {option_label} at {price}"
@@ -1371,7 +1401,7 @@ def generate_middle_options_market(board, apply_impact=True):
 
     half_spread = max(
         (board['stock_spread']['offer'] - board['stock_spread']['bid']) / 2.0,
-        MIN_TICK
+        _MIN_HALF_SPREAD_FOR_EDGE
     )
     # Delta-adjusted fair: BS price at open + delta × (current stock − initial stock)
     bs_fair_at_open = board['answers'][strike]['call' if is_call else 'put']
@@ -1386,7 +1416,7 @@ def generate_middle_options_market(board, apply_impact=True):
     total_edge  = option_edge + noise
     price       = round_to_cent(fair - total_edge) if side == 'bid' else round_to_cent(fair + total_edge)
 
-    # Recover implied stock via first-order delta approximation
+    # Recover implied stock via first-order delta approximation (pre-flip, pre-impact)
     if abs(delta) > 1e-6:
         implied_stock = round_to_cent(board['stock_num'] + (price - fair) / delta)
     else:
@@ -1400,6 +1430,12 @@ def generate_middle_options_market(board, apply_impact=True):
     # Apply impact only when aggressive and the caller wants immediate impact
     if apply_impact and ((side == 'bid' and price > fair) or (side == 'offer' and price < fair)):
         _apply_options_impact(board, opt_size, delta, side)
+        # Bound stock fair by the implied stock so an aggressive order never
+        # moves the fair further than the customer's price signals.
+        if side == 'bid':
+            board['stock_num'] = round_to_cent(min(board['stock_num'], implied_stock))
+        else:
+            board['stock_num'] = round_to_cent(max(board['stock_num'], implied_stock))
 
     if side == 'offer':
         speak = f"Customer offers {opt_size} lots of {option_label} at {price}"
@@ -1463,7 +1499,7 @@ def generate_directed_option_order_data(board, strike_f, option_type, preferred_
 
     half_spread = max(
         (board['stock_spread']['offer'] - board['stock_spread']['bid']) / 2.0,
-        MIN_TICK
+        _MIN_HALF_SPREAD_FOR_EDGE
     )
 
     stock_move = board['stock_num'] - board['initial_stock_num']
@@ -1477,6 +1513,7 @@ def generate_directed_option_order_data(board, strike_f, option_type, preferred_
     total_edge  = option_edge + noise
     price       = round_to_cent(fair - total_edge) if side == 'bid' else round_to_cent(fair + total_edge)
 
+    # Recover implied stock (pre-flip, pre-impact)
     if abs(delta) > 1e-6:
         implied_stock = round_to_cent(board['stock_num'] + (price - fair) / delta)
     else:
@@ -1488,6 +1525,12 @@ def generate_directed_option_order_data(board, strike_f, option_type, preferred_
 
     if apply_impact and ((side == 'bid' and price > fair) or (side == 'offer' and price < fair)):
         _apply_options_impact(board, opt_size, delta, side)
+        # Bound stock fair by the implied stock so an aggressive order never
+        # moves the fair further than the customer's price signals.
+        if side == 'bid':
+            board['stock_num'] = round_to_cent(min(board['stock_num'], implied_stock))
+        else:
+            board['stock_num'] = round_to_cent(max(board['stock_num'], implied_stock))
 
     option_label = f"{int(strike_f)} {option_type}"
     speak = (f"Customer offers {opt_size} lots of {option_label} at {price}"
@@ -1592,7 +1635,7 @@ def _generate_spread_data(board, spread_types=None, strike_pool=None, apply_impa
     side = random.choice(['bid', 'offer'])
     half_spread = max(
         (board['stock_spread']['offer'] - board['stock_spread']['bid']) / 2.0,
-        MIN_TICK
+        _MIN_HALF_SPREAD_FOR_EDGE
     )
     k    = float(np.random.choice(_MIDDLE_OPTIONS_K_LIST))
     edge = round_to_cent(k * half_spread)
@@ -1642,7 +1685,7 @@ def generate_opening_order_data(board):
 
     half_spread = max(
         (board['stock_spread']['offer'] - board['stock_spread']['bid']) / 2.0,
-        MIN_TICK
+        _MIN_HALF_SPREAD_FOR_EDGE
     )
     edge = round_to_cent(k * half_spread)
 
