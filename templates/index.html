@@ -28,6 +28,12 @@
             <button class="decision-time-btn" onclick="setQuoteTime()">Set</button>
         </div>
         <div id="quote-time-status" class="decision-time-status">No limit</div>
+        <label class="decision-time-label" style="margin-top:6px;">Convergence Lag</label>
+        <div class="decision-time-row">
+            <input id="convergence-lag-input" type="number" min="0" step="1" placeholder="secs" class="decision-time-input">
+            <button class="decision-time-btn" onclick="setConvergenceLag()">Set</button>
+        </div>
+        <div id="convergence-lag-status" class="decision-time-status">0s</div>
         <label class="decision-time-label" style="margin-top:6px;">Stock fair</label>
         <div class="decision-time-row">
             <input id="stock-fair-input" type="number" step="0.01" placeholder="price" class="decision-time-input">
@@ -47,6 +53,7 @@
         <button onclick="newBoard()">New Board</button>
         <button onclick="toggleAnswers()">Toggle Answers</button>
         <button onclick="toggleDeltas()">Toggle Deltas</button>
+        <button onclick="lockOptionsQuotes()">Lock Options Quotes</button>
         <button onclick="makeRandomMarket()">Make a Random Market</button>
         <button onclick="generateRandomOrder()">Generate Random Order</button>
         <!-- right column -->
@@ -59,11 +66,10 @@
         <button onclick="makeMiddleOptionsMarket()">Make a Middle Options Market</button>
         <button onclick="generateMiddleOptionOrder()">Generate Middle Option Order</button>
         <button onclick="generateOtmOrder()">Generate OTM Order</button>
-        <button onclick="lockOptionsQuotes()">Lock Options Quotes</button>
-        <button onclick="generateOpeningOrder()">Generate Opening Order</button>
         <button onclick="makeRRMarket()">Quote RR</button>
         <button onclick="makeCSPSMarket()">Quote CS/PS</button>
         <button onclick="generateSpreadOrder()">Trade Spread</button>
+        <button onclick="targetPractice()">Target Practice</button>
     </div>
 
 </div>
@@ -164,6 +170,7 @@
             <label class="ladder-config-label">Size</label>
             <input id="ladder-order-size" type="number" value="1000" min="100" step="100" class="ladder-size-input">
             <button class="ladder-cancel-btn" onclick="cancelAllLadderOrders()">Cancel Orders</button>
+            <button id="pause-btn" class="ladder-pause-btn" onclick="togglePause()">⏸ Pause</button>
         </div>
         <div class="ladder-scroll">
             <table class="stock-ladder">
@@ -277,6 +284,19 @@ function setQuoteTime() {
         quoteTime = val;
         status.textContent = `${val}s per quote`;
     }
+}
+
+function setConvergenceLag() {
+    const val = parseFloat(document.getElementById("convergence-lag-input").value);
+    const status = document.getElementById("convergence-lag-status");
+    const lag = (isNaN(val) || val < 0) ? 0 : val;
+    fetch("/set_convergence_lag", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({lag})
+    }).then(r => r.json()).then(data => {
+        status.textContent = data.lag === 0 ? "0s (no lag)" : `${data.lag}s`;
+    });
 }
 
 function setStockFair() {
@@ -1038,6 +1058,19 @@ function makeCSPSMarket() {
         });
 }
 
+function targetPractice() {
+    const actions = [
+        makeMarket,
+        generateOrder,
+        makeOptionsMarket,
+        generateOptionsOrder,
+        makeCSPSMarket,
+        makeRRMarket,
+        generateSpreadOrder,
+    ];
+    actions[Math.floor(Math.random() * actions.length)]();
+}
+
 function generateSpreadOrder() {
     fetch("/generate_spread_order")
         .then(r => r.json())
@@ -1378,6 +1411,21 @@ function cancelAllLadderOrders() {
             fetchLadder();
         })
         .catch(() => showLadderMessage("Cancel failed"));
+}
+
+function togglePause() {
+    fetch("/toggle_pause", { method: "POST" })
+        .then(r => r.json())
+        .then(data => {
+            const btn = document.getElementById("pause-btn");
+            if (data.paused) {
+                btn.textContent = "▶ Resume";
+                btn.classList.add("ladder-pause-btn--paused");
+            } else {
+                btn.textContent = "⏸ Pause";
+                btn.classList.remove("ladder-pause-btn--paused");
+            }
+        });
 }
 
 function showLadderMessage(msg) {

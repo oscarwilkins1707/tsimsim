@@ -408,6 +408,34 @@ body {
     border-color: #c06060;
 }
 
+.ladder-pause-btn {
+    padding: 3px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    margin: 0;
+    background: #f0f4ff;
+    border: 1px solid #9ab;
+    border-radius: 3px;
+    color: #334;
+    white-space: nowrap;
+}
+
+.ladder-pause-btn:hover {
+    background: #dde8ff;
+    border-color: #6680aa;
+}
+
+.ladder-pause-btn--paused {
+    background: #fffbe6;
+    border-color: #c9a800;
+    color: #664400;
+}
+
+.ladder-pause-btn--paused:hover {
+    background: #fff3b0;
+    border-color: #a07800;
+}
+
 .ladder-message {
     margin-top: 4px;
     font-size: 11px;
