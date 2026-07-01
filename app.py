@@ -2022,6 +2022,24 @@ def place_ladder_order():
     return jsonify(result)
 
 
+@app.route("/ladder")
+def ladder():
+    return render_template("ladder.html")
+
+
+@app.route("/starting_info")
+def starting_info():
+    return render_template(
+        "starting_info.html",
+        rc=BOARD["rc"],
+        strikes=BOARD["strikes"],
+        info=BOARD["info"],
+        highlight=BOARD["highlight"],
+        stock_size=BOARD["stock_size"],
+        stock_ref=BOARD["initial_stock_num"]
+    )
+
+
 @app.route("/")
 def index():
     return render_template(

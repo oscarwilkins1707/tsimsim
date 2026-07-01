@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Options Board</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+
+<body>
+
+<div class="outer-wrapper">
+<div class="left-content">
+
+<!-- ================= HEADER ================= -->
+
+<div class="page-header">
+
+    <div class="decision-time-panel">
+        <button id="audio-mode-btn" class="audio-mode-btn" onclick="toggleAudioMode()">Audio Mode</button>
+        <label class="decision-time-label">Decision time</label>
+        <div class="decision-time-row">
+            <input id="decision-time-input" type="number" min="1" placeholder="secs" class="decision-time-input">
+            <button class="decision-time-btn" onclick="setDecisionTime()">Set</button>
+        </div>
+        <div id="decision-time-status" class="decision-time-status">No limit</div>
+        <label class="decision-time-label" style="margin-top:6px;">Quote time</label>
+        <div class="decision-time-row">
+            <input id="quote-time-input" type="number" min="1" placeholder="secs" class="decision-time-input">
+            <button class="decision-time-btn" onclick="setQuoteTime()">Set</button>
+        </div>
+        <div id="quote-time-status" class="decision-time-status">No limit</div>
+        <label class="decision-time-label" style="margin-top:6px;">Convergence Lag</label>
+        <div class="decision-time-row">
+            <input id="convergence-lag-input" type="number" min="0" step="1" placeholder="secs" class="decision-time-input">
+            <button class="decision-time-btn" onclick="setConvergenceLag()">Set</button>
+        </div>
+        <div id="convergence-lag-status" class="decision-time-status">0s</div>
+        <label class="decision-time-label" style="margin-top:6px;">Stock fair</label>
+        <div class="decision-time-row">
+            <input id="stock-fair-input" type="number" step="0.01" placeholder="price" class="decision-time-input">
+            <button class="decision-time-btn" onclick="setStockFair()">Set</button>
+        </div>
+        <div id="stock-fair-status" class="decision-time-status">Actual fair</div>
+        <label class="decision-time-label" style="margin-top:6px;">Stock drift</label>
+        <div class="decision-time-row">
+            <input id="drift-slider" type="range" min="0" max="100" value="75"
+                   style="flex:1;cursor:pointer;" oninput="onDriftSlider(this.value)">
+        </div>
+        <div id="drift-status" class="decision-time-status">Very high</div>
+    </div>
+
+    <div class="action-buttons">
+        <button onclick="newBoard()">New Board</button>
+        <button onclick="toggleAnswers()">Toggle Answers</button>
+        <button onclick="toggleDeltas()">Toggle Deltas</button>
+        <button onclick="lockOptionsQuotes()">Lock Options Quotes</button>
+    </div>
+
+</div>
+
+<!-- ================= MAIN LAYOUT ================= -->
+
+<div class="main-layout">
+
+    <!-- left column: spread/straddle info -->
+    <div class="main-left">
+        <div class="info-panel">
+            <div class="info-line info-line-stockref">
+                <span class="info-text info-text-stockref">stock ref: {{ "%.2f"|format(stock_ref) }}</span>
+            </div>
+            <div class="info-line">
+                <button class="info-toggle-btn" onclick="toggleInfoLine(this)">hide</button>
+                <span class="info-text">{{ rc }}</span>
+            </div>
+            {% for line in info %}
+                <div class="info-line">
+                    <button class="info-toggle-btn" onclick="toggleInfoLine(this)">hide</button>
+                    <span class="info-text">{{ line }}</span>
+                </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- right column: options board -->
+    <div class="main-right">
+        <table class="board">
+            <thead>
+                <tr>
+                    <th>Call</th>
+                    <th>Strike</th>
+                    <th>Put</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for strike in strikes %}
+                <tr data-strike="{{ strike }}">
+                    <td class="call {% if highlight.strike == strike and highlight.side == 'call' %}highlight{% endif %}">
+                        <div class="option-cell">
+                            <input type="number" class="option-bid" placeholder="Bid" step="0.01">
+                            <input type="number" class="option-ask" placeholder="Ask" step="0.01">
+                            <span class="option-answer"></span>
+                            <span class="option-delta"></span>
+                        </div>
+                    </td>
+                    <td class="strike">{{ strike }}</td>
+                    <td class="put {% if highlight.strike == strike and highlight.side == 'put' %}highlight{% endif %}">
+                        <div class="option-cell">
+                            <input type="number" class="option-bid" placeholder="Bid" step="0.01">
+                            <input type="number" class="option-ask" placeholder="Ask" step="0.01">
+                            <span class="option-answer"></span>
+                            <span class="option-delta"></span>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+</div><!-- end main-layout -->
+</div><!-- end left-content -->
+</div><!-- end outer-wrapper -->
+
+<script>
+
+const stockSize = {{ stock_size }};
+const stockRef  = {{ stock_ref }};
+const boardStrikes = {{ strikes | tojson }};
+
+let audioMode    = localStorage.getItem('si_audioMode')    === 'true';
+let decisionTime = parseFloat(localStorage.getItem('si_decisionTime')) || null;
+let quoteTime    = parseFloat(localStorage.getItem('si_quoteTime'))    || null;
+
+// Restore settings UI from localStorage on load
+(function restoreSettings() {
+    if (audioMode) document.getElementById("audio-mode-btn").classList.add("btn-active");
+
+    if (decisionTime) {
+        document.getElementById("decision-time-input").value = decisionTime;
+        document.getElementById("decision-time-status").textContent = `${decisionTime}s`;
+    }
+    if (quoteTime) {
+        document.getElementById("quote-time-input").value = quoteTime;
+        document.getElementById("quote-time-status").textContent = `${quoteTime}s per quote`;
+    }
+
+    const lag = parseFloat(localStorage.getItem('si_convergenceLag')) || 0;
+    if (lag > 0) {
+        document.getElementById("convergence-lag-input").value = lag;
+        document.getElementById("convergence-lag-status").textContent = `${lag}s`;
+    }
+})();
+
+function toggleAudioMode() {
+    audioMode = !audioMode;
+    document.getElementById("audio-mode-btn").classList.toggle("btn-active", audioMode);
+    localStorage.setItem('si_audioMode', audioMode);
+}
+
+function setDecisionTime() {
+    const val = parseFloat(document.getElementById("decision-time-input").value);
+    const status = document.getElementById("decision-time-status");
+    if (isNaN(val) || val <= 0) {
+        decisionTime = null;
+        localStorage.removeItem('si_decisionTime');
+        status.textContent = "No limit";
+    } else {
+        decisionTime = val;
+        localStorage.setItem('si_decisionTime', val);
+        status.textContent = `${val}s`;
+    }
+}
+
+function setQuoteTime() {
+    const val = parseFloat(document.getElementById("quote-time-input").value);
+    const status = document.getElementById("quote-time-status");
+    if (isNaN(val) || val <= 0) {
+        quoteTime = null;
+        localStorage.removeItem('si_quoteTime');
+        status.textContent = "No limit";
+    } else {
+        quoteTime = val;
+        localStorage.setItem('si_quoteTime', val);
+        status.textContent = `${val}s per quote`;
+    }
+}
+
+function setConvergenceLag() {
+    const val = parseFloat(document.getElementById("convergence-lag-input").value);
+    const status = document.getElementById("convergence-lag-status");
+    const lag = (isNaN(val) || val < 0) ? 0 : val;
+    fetch("/set_convergence_lag", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({lag})
+    }).then(r => r.json()).then(data => {
+        status.textContent = data.lag === 0 ? "0s (no lag)" : `${data.lag}s`;
+        localStorage.setItem('si_convergenceLag', data.lag);
+    });
+}
+
+function setStockFair() {
+    const raw    = document.getElementById("stock-fair-input").value.trim();
+    const status = document.getElementById("stock-fair-status");
+    const val    = parseFloat(raw);
+
+    if (raw === "" || isNaN(val)) {
+        status.textContent = "Actual fair";
+        if (answersVisible) {
+            fetch("/reveal").then(r => r.json()).then(data => { cachedAnswers = data; showAnswers(); });
+        }
+        if (deltasVisible) {
+            fetch("/reveal_deltas").then(r => r.json()).then(data => { cachedDeltas = data; showDeltas(); });
+        }
+        return;
+    }
+
+    status.textContent = `S = ${val.toFixed(2)}`;
+    fetch(`/reveal_at?stock=${val}`)
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) return;
+            cachedAnswers = data.answers;
+            cachedDeltas  = data.deltas;
+            if (answersVisible) showAnswers();
+            if (deltasVisible)  showDeltas();
+        });
+}
+
+function onDriftSlider(val) {
+    const level = parseInt(val) / 100;
+    const labels = ["Frozen", "Very low", "Low", "Medium", "High", "Very high", "Max"];
+    const idx = Math.round(level * (labels.length - 1));
+    document.getElementById("drift-status").textContent = labels[idx];
+    fetch("/set_drift", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({level})
+    });
+}
+
+/* ================= BOARD ================= */
+
+let answersVisible = false;
+let cachedAnswers  = null;
+let deltasVisible  = false;
+let cachedDeltas   = null;
+
+function toggleAnswers() {
+    answersVisible = !answersVisible;
+    if (answersVisible) {
+        fetch("/reveal").then(r => r.json()).then(data => { cachedAnswers = data; showAnswers(); });
+    } else {
+        hideAnswers();
+    }
+}
+
+function showAnswers() {
+    document.querySelectorAll("tr[data-strike]").forEach(row => {
+        const strike = row.dataset.strike;
+        if (!cachedAnswers[strike]) return;
+        const callSpan = row.querySelector(".call .option-answer");
+        const putSpan  = row.querySelector(".put  .option-answer");
+        if (callSpan) callSpan.textContent = `(${cachedAnswers[strike].call.toFixed(2)})`;
+        if (putSpan)  putSpan.textContent  = `(${cachedAnswers[strike].put.toFixed(2)})`;
+    });
+}
+
+function hideAnswers() {
+    document.querySelectorAll(".option-answer").forEach(el => el.textContent = "");
+}
+
+function toggleDeltas() {
+    deltasVisible = !deltasVisible;
+    if (deltasVisible) {
+        if (cachedDeltas) {
+            showDeltas();
+        } else {
+            fetch("/reveal_deltas").then(r => r.json()).then(data => { cachedDeltas = data; showDeltas(); });
+        }
+    } else {
+        hideDeltas();
+    }
+}
+
+function showDeltas() {
+    document.querySelectorAll("tr[data-strike]").forEach(row => {
+        const strike = row.dataset.strike;
+        if (!cachedDeltas[strike]) return;
+        const callSpan = row.querySelector(".call .option-delta");
+        const putSpan  = row.querySelector(".put  .option-delta");
+        if (callSpan) callSpan.textContent = `[Δ ${cachedDeltas[strike].call.toFixed(2)}]`;
+        if (putSpan)  putSpan.textContent  = `[Δ ${cachedDeltas[strike].put.toFixed(2)}]`;
+    });
+}
+
+function hideDeltas() {
+    document.querySelectorAll(".option-delta").forEach(el => el.textContent = "");
+}
+
+function lockOptionsQuotes() {
+    function processLock(answers) {
+        document.querySelectorAll("tr[data-strike]").forEach(row => {
+            const strike = row.dataset.strike;
+            const answerData = answers[strike];
+            if (!answerData) return;
+
+            ["call", "put"].forEach(side => {
+                const td = row.querySelector(`.${side}`);
+                if (!td) return;
+                const cell     = td.querySelector(".option-cell");
+                const bidInput = td.querySelector(".option-bid");
+                const askInput = td.querySelector(".option-ask");
+
+                const bid = parseFloat(bidInput.value);
+                const ask = parseFloat(askInput.value);
+                if (isNaN(bid) || isNaN(ask)) return;
+
+                const fair    = answerData[side];
+                const correct = fair >= bid && fair <= ask;
+
+                td.classList.remove("quote-wrong");
+                const prev = cell.querySelector(".option-locked");
+                if (prev) prev.remove();
+                cell.querySelectorAll(".otm-cell-btn").forEach(b => b.remove());
+                bidInput.style.display = "";
+                askInput.style.display = "";
+
+                if (correct) {
+                    bidInput.style.display = "none";
+                    askInput.style.display = "none";
+                    const lockedSpan = document.createElement("span");
+                    lockedSpan.className = "option-locked";
+                    lockedSpan.textContent = `${bid.toFixed(2)} (${stockSize}x) - ${ask.toFixed(2)} (${stockSize}x)`;
+                    cell.insertBefore(lockedSpan, cell.firstChild);
+                } else {
+                    td.classList.add("quote-wrong");
+                }
+            });
+        });
+    }
+
+    fetch(`/reveal_at?stock=${stockRef}`)
+        .then(r => r.json())
+        .then(data => { processLock(data.answers); });
+}
+
+function newBoard() {
+    window.location.href = "/new_board";
+}
+
+function toggleInfoLine(btn) {
+    const textSpan = btn.nextElementSibling;
+    const hidden = textSpan.classList.toggle("info-text-hidden");
+    btn.textContent = hidden ? "show" : "hide";
+}
+
+</script>
+
+</body>
+</html>

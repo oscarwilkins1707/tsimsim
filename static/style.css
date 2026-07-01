@@ -114,11 +114,104 @@ body {
 
 /* ===== ACTION BUTTONS (top-right, 2-column grid) ===== */
 
+/* Main page header: buttons left, quoting window right */
+.main-page-header {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: flex-start;
+    gap: 24px;
+    grid-template-columns: unset !important;
+}
+
 .action-buttons {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 5px;
     align-items: start;
+    flex-shrink: 0;
+}
+
+/* ===== QUOTING WINDOW ===== */
+
+.quoting-window {
+    flex: 1;
+    min-width: 220px;
+    max-width: 340px;
+    border: 2px solid #ccc;
+    border-radius: 6px;
+    padding: 12px 16px;
+    background: #fafafa;
+    box-sizing: border-box;
+    transition: border-color 0.2s, background 0.2s;
+}
+
+.quoting-window--idle {
+    border-color: #ddd;
+    background: #f8f8f8;
+}
+
+.quoting-window--active {
+    border-color: #4477cc;
+    background: #f0f5ff;
+}
+
+.quoting-window-title {
+    font-weight: bold;
+    font-size: 13px;
+    margin-bottom: 10px;
+    color: #333;
+    word-break: break-word;
+}
+
+.quoting-window--idle .quoting-window-title {
+    color: #999;
+    font-weight: normal;
+}
+
+.quoting-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 7px;
+}
+
+.quoting-label {
+    font-size: 12px;
+    width: 36px;
+    text-align: right;
+    color: #555;
+    flex-shrink: 0;
+}
+
+.quoting-input {
+    flex: 1;
+    padding: 5px 7px;
+    font-size: 14px;
+    border: 1px solid #aaa;
+    border-radius: 3px;
+    width: 0;
+}
+
+.quoting-submit-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 8px;
+}
+
+.quoting-submit-btn {
+    padding: 5px 14px;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+@keyframes flash-quoting-red {
+    0%, 100% { background-color: #f0f5ff; }
+    50%       { background-color: #ffcccc; }
+}
+
+.quoting-window--flashing {
+    animation: flash-quoting-red 0.6s ease-in-out infinite;
 }
 
 .action-buttons button {
@@ -214,23 +307,11 @@ body {
 /* ===== OUTER WRAPPER: left content | right ladder ===== */
 
 .outer-wrapper {
-    display: flex;
-    gap: 20px;
-    align-items: flex-start;
+    display: block;
 }
 
 .left-content {
-    flex: 1;
-    min-width: 0;
-}
-
-.right-ladder {
-    flex-shrink: 0;
-    width: 640px;
-    position: sticky;
-    top: 20px;
-    max-height: calc(100vh - 40px);
-    overflow-y: auto;
+    width: 100%;
 }
 
 /* ===== MAIN LAYOUT: info left | board+below right ===== */

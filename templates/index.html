@@ -10,53 +10,12 @@
 <div class="outer-wrapper">
 <div class="left-content">
 
-<!-- ================= HEADER (quote + stock panel | buttons) ================= -->
+<!-- ================= ACTION BUTTONS + QUOTING WINDOW ================= -->
 
-<div class="page-header">
-
-    <div class="decision-time-panel">
-        <button id="audio-mode-btn" class="audio-mode-btn" onclick="toggleAudioMode()">Audio Mode</button>
-        <label class="decision-time-label">Decision time</label>
-        <div class="decision-time-row">
-            <input id="decision-time-input" type="number" min="1" placeholder="secs" class="decision-time-input">
-            <button class="decision-time-btn" onclick="setDecisionTime()">Set</button>
-        </div>
-        <div id="decision-time-status" class="decision-time-status">No limit</div>
-        <label class="decision-time-label" style="margin-top:6px;">Quote time</label>
-        <div class="decision-time-row">
-            <input id="quote-time-input" type="number" min="1" placeholder="secs" class="decision-time-input">
-            <button class="decision-time-btn" onclick="setQuoteTime()">Set</button>
-        </div>
-        <div id="quote-time-status" class="decision-time-status">No limit</div>
-        <label class="decision-time-label" style="margin-top:6px;">Convergence Lag</label>
-        <div class="decision-time-row">
-            <input id="convergence-lag-input" type="number" min="0" step="1" placeholder="secs" class="decision-time-input">
-            <button class="decision-time-btn" onclick="setConvergenceLag()">Set</button>
-        </div>
-        <div id="convergence-lag-status" class="decision-time-status">0s</div>
-        <label class="decision-time-label" style="margin-top:6px;">Stock fair</label>
-        <div class="decision-time-row">
-            <input id="stock-fair-input" type="number" step="0.01" placeholder="price" class="decision-time-input">
-            <button class="decision-time-btn" onclick="setStockFair()">Set</button>
-        </div>
-        <div id="stock-fair-status" class="decision-time-status">Actual fair</div>
-        <label class="decision-time-label" style="margin-top:6px;">Stock drift</label>
-        <div class="decision-time-row">
-            <input id="drift-slider" type="range" min="0" max="100" value="75"
-                   style="flex:1;cursor:pointer;" oninput="onDriftSlider(this.value)">
-        </div>
-        <div id="drift-status" class="decision-time-status">Very high</div>
-    </div>
-
+<div class="page-header main-page-header">
     <div class="action-buttons">
-        <!-- left column -->
-        <button onclick="newBoard()">New Board</button>
-        <button onclick="toggleAnswers()">Toggle Answers</button>
-        <button onclick="toggleDeltas()">Toggle Deltas</button>
-        <button onclick="lockOptionsQuotes()">Lock Options Quotes</button>
         <button onclick="makeRandomMarket()">Make a Random Market</button>
         <button onclick="generateRandomOrder()">Generate Random Order</button>
-        <!-- right column -->
         <button onclick="makeMarket()">Make a Combo Market</button>
         <button onclick="generateOrder()">Generate Combo Order</button>
         <button onclick="makeAnyOptionsMarket()">Make an Options Market</button>
@@ -72,68 +31,30 @@
         <button onclick="targetPractice()">Target Practice</button>
     </div>
 
-</div>
-
-<!-- ================= MAIN LAYOUT ================= -->
-
-<div class="main-layout">
-
-    <!-- ===== LEFT COLUMN: spread/straddle info ===== -->
-    <div class="main-left">
-        <div class="info-panel">
-            <div class="info-line info-line-stockref">
-                <span class="info-text info-text-stockref">stock ref: {{ "%.2f"|format(stock_ref) }}</span>
+    <div id="quoting-window" class="quoting-window quoting-window--idle">
+        <div class="quoting-window-title" id="quoting-title">No active market</div>
+        <div class="quoting-window-inputs" id="quoting-inputs" style="display:none;">
+            <div class="quoting-row">
+                <label class="quoting-label">Bid</label>
+                <input id="bid-input" class="quoting-input" type="number" step="0.01" placeholder="0.00">
             </div>
-            <div class="info-line">
-                <button class="info-toggle-btn" onclick="toggleInfoLine(this)">hide</button>
-                <span class="info-text">{{ rc }}</span>
+            <div class="quoting-row">
+                <label class="quoting-label">Offer</label>
+                <input id="offer-input" class="quoting-input" type="number" step="0.01" placeholder="0.00">
             </div>
-            {% for line in info %}
-                <div class="info-line">
-                    <button class="info-toggle-btn" onclick="toggleInfoLine(this)">hide</button>
-                    <span class="info-text">{{ line }}</span>
-                </div>
-            {% endfor %}
+            <div class="quoting-submit-row">
+                <button class="quoting-submit-btn" onclick="submitMarket()">Submit</button>
+                <span id="modal-timer" class="modal-timer"></span>
+            </div>
         </div>
     </div>
+</div>
 
-    <!-- ===== RIGHT COLUMN: board then below-board split ===== -->
-    <div class="main-right">
+<!-- ================= TAPE + ORDERS ================= -->
 
-        <table class="board">
-            <thead>
-                <tr>
-                    <th>Call</th>
-                    <th>Strike</th>
-                    <th>Put</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for strike in strikes %}
-                <tr data-strike="{{ strike }}">
-                    <td class="call {% if highlight.strike == strike and highlight.side == 'call' %}highlight{% endif %}">
-                        <div class="option-cell">
-                            <input type="number" class="option-bid" placeholder="Bid" step="0.01">
-                            <input type="number" class="option-ask" placeholder="Ask" step="0.01">
-                            <span class="option-answer"></span>
-                            <span class="option-delta"></span>
-                        </div>
-                    </td>
-                    <td class="strike">{{ strike }}</td>
-                    <td class="put {% if highlight.strike == strike and highlight.side == 'put' %}highlight{% endif %}">
-                        <div class="option-cell">
-                            <input type="number" class="option-bid" placeholder="Bid" step="0.01">
-                            <input type="number" class="option-ask" placeholder="Ask" step="0.01">
-                            <span class="option-answer"></span>
-                            <span class="option-delta"></span>
-                        </div>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+<div class="main-layout" style="margin-top:12px;">
+    <div class="main-right" style="grid-column:1/-1;">
 
-        <!-- Two columns below the board -->
         <div class="below-board">
 
             <!-- tape -->
@@ -158,57 +79,10 @@
         </div>
 
     </div>
-
 </div><!-- end main-layout -->
+
 </div><!-- end left-content -->
-
-<!-- ================= STOCK LADDER (right sidebar) ================= -->
-
-<div class="right-ladder">
-    <div class="ladder-panel">
-        <div class="ladder-config">
-            <label class="ladder-config-label">Size</label>
-            <input id="ladder-order-size" type="number" value="1000" min="100" step="100" class="ladder-size-input">
-            <button class="ladder-cancel-btn" onclick="cancelAllLadderOrders()">Cancel Orders</button>
-            <button id="pause-btn" class="ladder-pause-btn" onclick="togglePause()">⏸ Pause</button>
-        </div>
-        <div class="ladder-scroll">
-            <table class="stock-ladder">
-                <thead>
-                    <tr>
-                        <th class="lh-filled">filled</th>
-                        <th class="lh-you">you</th>
-                        <th class="lh-bid">bid</th>
-                        <th class="lh-price">price</th>
-                        <th class="lh-offer">offer</th>
-                        <th class="lh-you">you</th>
-                        <th class="lh-filled">filled</th>
-                    </tr>
-                </thead>
-                <tbody id="ladder-body"></tbody>
-            </table>
-        </div>
-        <div id="ladder-message" class="ladder-message"></div>
-    </div>
-</div><!-- end right-ladder -->
-
 </div><!-- end outer-wrapper -->
-
-<!-- ================= MAKE MARKET MODAL ================= -->
-
-<div id="market-modal" class="modal" style="display:none;">
-    <div class="modal-box">
-        <h3 id="market-text"></h3>
-
-        <input id="bid-input" placeholder="Bid">
-        <input id="offer-input" placeholder="Offer">
-
-        <div class="modal-submit-row">
-            <button onclick="submitMarket()">Submit</button>
-            <span id="modal-timer" class="modal-timer"></span>
-        </div>
-    </div>
-</div>
 
 <!-- ================= JAVASCRIPT ================= -->
 
@@ -216,41 +90,45 @@
 
 /* ================= GLOBAL STATE ================= */
 
-let pendingMarket = null;
+let pendingMarket    = null;
 let showImpliedStock = false;
-const stockSize = {{ stock_size }};
-const stockRef = {{ stock_ref }};
-let decisionTime = null;   // null = no constraint
-let audioMode = false;
-let tradeCounter = 0;
-let quoteTime = null;
-let modalTimerInterval = null;
-
-// Registry of resting options orders per cell: option_label → [{side, price, size, orderId}]
-const cellRestingOrders = {};
-// Registry of resting combo orders per strike: strikeKey → [{side, price, size, orderId}]
-const comboRestingOrders = {};
-// Registry of resting spread orders per label: spread_label → [{side, price, size, orderId}]
-const spreadRestingOrders = {};
-let nextOrderId = 0;
-
-// Board strikes injected from server (used by strategy engine)
-const boardStrikes = {{ strikes | tojson }};
-const tickSize = boardStrikes.length >= 2
+const stockSize      = {{ stock_size }};
+const stockRef       = {{ stock_ref }};
+const boardStrikes   = {{ strikes | tojson }};
+const tickSize       = boardStrikes.length >= 2
     ? Math.round((boardStrikes[1] - boardStrikes[0]) * 100) / 100
     : 5;
 
+// Submit on Enter from bid/offer inputs
+document.addEventListener("keydown", function(e) {
+    if (e.key !== "Enter") return;
+    const active = document.activeElement;
+    if (active && (active.id === "bid-input" || active.id === "offer-input")) {
+        submitMarket();
+    }
+});
+
+// Read shared settings written by /starting_info
+let audioMode    = localStorage.getItem('si_audioMode')    === 'true';
+let decisionTime = parseFloat(localStorage.getItem('si_decisionTime')) || null;
+let quoteTime    = parseFloat(localStorage.getItem('si_quoteTime'))    || null;
+
+let modalTimerInterval = null;
+let tradeCounter       = 0;
+let nextOrderId        = 0;
+
+// Registry of resting options orders per cell: option_label → [{side, price, size, orderId}]
+const cellRestingOrders   = {};
+// Registry of resting combo orders per strike: strikeKey → [{side, price, size, orderId}]
+const comboRestingOrders  = {};
+// Registry of resting spread orders per label: spread_label → [{side, price, size, orderId}]
+const spreadRestingOrders = {};
+
 // Strategy companion queue: [{strike, option_type, preferred_side}]
-// Consumed (FIFO) by generateAnyOptionsOrder() and generateRandomOrder().
 let strategyLegs = [];
 
 function isOnBoard(s) {
     return boardStrikes.some(bs => Math.abs(bs - s) < 0.01);
-}
-
-function toggleAudioMode() {
-    audioMode = !audioMode;
-    document.getElementById("audio-mode-btn").classList.toggle("btn-active", audioMode);
 }
 
 function speakIfEnabled(text) {
@@ -262,99 +140,14 @@ function speakIfEnabled(text) {
     });
 }
 
-function setDecisionTime() {
-    const val = parseFloat(document.getElementById("decision-time-input").value);
-    const status = document.getElementById("decision-time-status");
-    if (isNaN(val) || val <= 0) {
-        decisionTime = null;
-        status.textContent = "No limit";
-    } else {
-        decisionTime = val;
-        status.textContent = `${val}s`;
-    }
-}
-
-function setQuoteTime() {
-    const val = parseFloat(document.getElementById("quote-time-input").value);
-    const status = document.getElementById("quote-time-status");
-    if (isNaN(val) || val <= 0) {
-        quoteTime = null;
-        status.textContent = "No limit";
-    } else {
-        quoteTime = val;
-        status.textContent = `${val}s per quote`;
-    }
-}
-
-function setConvergenceLag() {
-    const val = parseFloat(document.getElementById("convergence-lag-input").value);
-    const status = document.getElementById("convergence-lag-status");
-    const lag = (isNaN(val) || val < 0) ? 0 : val;
-    fetch("/set_convergence_lag", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({lag})
-    }).then(r => r.json()).then(data => {
-        status.textContent = data.lag === 0 ? "0s (no lag)" : `${data.lag}s`;
-    });
-}
-
-function setStockFair() {
-    const raw    = document.getElementById("stock-fair-input").value.trim();
-    const status = document.getElementById("stock-fair-status");
-    const val    = parseFloat(raw);
-
-    if (raw === "" || isNaN(val)) {
-        // Revert to actual stock fair
-        status.textContent = "Actual fair";
-        // Re-fetch live data so the display reflects the real stock again
-        if (answersVisible) {
-            fetch("/reveal")
-                .then(r => r.json())
-                .then(data => { cachedAnswers = data; showAnswers(); });
-        }
-        if (deltasVisible) {
-            fetch("/reveal_deltas")
-                .then(r => r.json())
-                .then(data => { cachedDeltas = data; showDeltas(); });
-        }
-        return;
-    }
-
-    status.textContent = `S = ${val.toFixed(2)}`;
-
-    fetch(`/reveal_at?stock=${val}`)
-        .then(r => r.json())
-        .then(data => {
-            if (data.error) return;
-            // Override the caches with the custom-stock values
-            cachedAnswers = data.answers;
-            cachedDeltas  = data.deltas;
-            if (answersVisible) showAnswers();
-            if (deltasVisible)  showDeltas();
-        });
-}
-
-function onDriftSlider(val) {
-    const level = parseInt(val) / 100;
-    const labels = ["Frozen", "Very low", "Low", "Medium", "High", "Very high", "Max"];
-    const idx = Math.round(level * (labels.length - 1));
-    document.getElementById("drift-status").textContent = labels[idx];
-    fetch("/set_drift", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({level: level})
-    });
-}
+/* ================= MODAL TIMER ================= */
 
 function startModalTimer() {
     if (!quoteTime) return;
-
     const timerSpan = document.getElementById("modal-timer");
-    const modalBox  = document.querySelector(".modal-box");
+    const qw        = document.getElementById("quoting-window");
     let remaining = quoteTime;
     timerSpan.textContent = `${remaining}s`;
-
     modalTimerInterval = setInterval(() => {
         remaining -= 1;
         timerSpan.textContent = `${remaining}s`;
@@ -362,7 +155,7 @@ function startModalTimer() {
             clearInterval(modalTimerInterval);
             modalTimerInterval = null;
             timerSpan.textContent = "Time's up!";
-            modalBox.classList.add("modal-box-flashing");
+            qw.classList.add("quoting-window--flashing");
         }
     }, 1000);
 }
@@ -373,143 +166,14 @@ function clearModalTimer() {
         modalTimerInterval = null;
     }
     document.getElementById("modal-timer").textContent = "";
-    document.querySelector(".modal-box").classList.remove("modal-box-flashing");
-}
-
-/* ================= BOARD ================= */
-
-let answersVisible = false;
-let cachedAnswers = null;
-let deltasVisible = false;
-let cachedDeltas = null;
-
-function toggleAnswers() {
-    answersVisible = !answersVisible;
-    if (answersVisible) {
-        fetch("/reveal")
-            .then(r => r.json())
-            .then(data => {
-                cachedAnswers = data;
-                showAnswers();
-            });
-    } else {
-        hideAnswers();
-    }
-}
-
-function showAnswers() {
-    document.querySelectorAll("tr[data-strike]").forEach(row => {
-        const strike = row.dataset.strike;
-        if (!cachedAnswers[strike]) return;
-        const callSpan = row.querySelector(".call .option-answer");
-        const putSpan  = row.querySelector(".put  .option-answer");
-        if (callSpan) callSpan.textContent = `(${cachedAnswers[strike].call.toFixed(2)})`;
-        if (putSpan)  putSpan.textContent  = `(${cachedAnswers[strike].put.toFixed(2)})`;
-    });
-}
-
-function hideAnswers() {
-    document.querySelectorAll(".option-answer").forEach(el => el.textContent = "");
-}
-
-function toggleDeltas() {
-    deltasVisible = !deltasVisible;
-    if (deltasVisible) {
-        if (cachedDeltas) {
-            showDeltas();
-        } else {
-            fetch("/reveal_deltas")
-                .then(r => r.json())
-                .then(data => {
-                    cachedDeltas = data;
-                    showDeltas();
-                });
-        }
-    } else {
-        hideDeltas();
-    }
-}
-
-function showDeltas() {
-    document.querySelectorAll("tr[data-strike]").forEach(row => {
-        const strike = row.dataset.strike;
-        if (!cachedDeltas[strike]) return;
-        const callSpan = row.querySelector(".call .option-delta");
-        const putSpan  = row.querySelector(".put  .option-delta");
-        if (callSpan) callSpan.textContent = `[Δ ${cachedDeltas[strike].call.toFixed(2)}]`;
-        if (putSpan)  putSpan.textContent  = `[Δ ${cachedDeltas[strike].put.toFixed(2)}]`;
-    });
-}
-
-function hideDeltas() {
-    document.querySelectorAll(".option-delta").forEach(el => el.textContent = "");
-}
-
-function lockOptionsQuotes() {
-    function processLock(answers) {
-        document.querySelectorAll("tr[data-strike]").forEach(row => {
-            const strike = row.dataset.strike;
-            const answerData = answers[strike];
-            if (!answerData) return;
-
-            ["call", "put"].forEach(side => {
-                const td = row.querySelector(`.${side}`);
-                if (!td) return;
-                const cell = td.querySelector(".option-cell");
-                const bidInput = td.querySelector(".option-bid");
-                const askInput = td.querySelector(".option-ask");
-
-                const bid = parseFloat(bidInput.value);
-                const ask = parseFloat(askInput.value);
-                if (isNaN(bid) || isNaN(ask)) return;
-
-                const fair = answerData[side];
-                const correct = fair >= bid && fair <= ask;
-
-                // Clear any previous lock state
-                td.classList.remove("quote-wrong");
-                const prev = cell.querySelector(".option-locked");
-                if (prev) prev.remove();
-                cell.querySelectorAll(".otm-cell-btn").forEach(b => b.remove());
-                bidInput.style.display = "";
-                askInput.style.display = "";
-
-                if (correct) {
-                    bidInput.style.display = "none";
-                    askInput.style.display = "none";
-                    const lockedSpan = document.createElement("span");
-                    lockedSpan.className = "option-locked";
-                    lockedSpan.textContent = `${bid.toFixed(2)} (${stockSize}x) - ${ask.toFixed(2)} (${stockSize}x)`;
-                    cell.insertBefore(lockedSpan, cell.firstChild);
-                } else {
-                    td.classList.add("quote-wrong");
-                }
-            });
-        });
-    }
-
-    fetch(`/reveal_at?stock=${stockRef}`)
-        .then(r => r.json())
-        .then(data => {
-            processLock(data.answers);
-        });
-}
-
-function newBoard() {
-    window.location.href = "/new_board";
-}
-
-function toggleInfoLine(btn) {
-    const textSpan = btn.nextElementSibling;
-    const hidden = textSpan.classList.toggle("info-text-hidden");
-    btn.textContent = hidden ? "show" : "hide";
+    document.getElementById("quoting-window").classList.remove("quoting-window--flashing");
 }
 
 /* ================= TRADE TAPE ================= */
 
 function addTapeEntry(text, impliedStock) {
     const container = document.getElementById("tape-container");
-    const entry = document.createElement("div");
+    const entry     = document.createElement("div");
     entry.className = "tape-entry";
 
     const textSpan = document.createElement("span");
@@ -518,8 +182,8 @@ function addTapeEntry(text, impliedStock) {
 
     if (impliedStock != null) {
         const isSpan = document.createElement("span");
-        isSpan.className = "tape-implied-stock";
-        isSpan.innerText = ` [Implied stock: ${parseFloat(impliedStock).toFixed(2)}]`;
+        isSpan.className  = "tape-implied-stock";
+        isSpan.innerText  = ` [Implied stock: ${parseFloat(impliedStock).toFixed(2)}]`;
         isSpan.style.display = showImpliedStock ? "inline" : "none";
         entry.appendChild(isSpan);
     }
@@ -527,16 +191,12 @@ function addTapeEntry(text, impliedStock) {
     container.insertBefore(entry, container.firstChild);
 }
 
-/* ================= SHOW / HIDE IMPLIED STOCK ================= */
-
 function toggleImpliedStock() {
     showImpliedStock = !showImpliedStock;
     document.querySelectorAll(".tape-implied-stock").forEach(el => {
         el.style.display = showImpliedStock ? "inline" : "none";
     });
 }
-
-/* ================= SHOW / HIDE STOCK FAIR ================= */
 
 function toggleFair() {
     const panel = document.getElementById("fair-panel");
@@ -566,21 +226,13 @@ function toggleFair() {
 
 /* ================= ORDER RENDERING ================= */
 
-// True for any options order (ITM, OTM, or middle-strike).
-function isOpt(kind) {
-    return kind === "options" || kind === "middle_options";
-}
-
-function isSpread(kind) {
-    return kind === "spread";
-}
+function isOpt(kind)    { return kind === "options" || kind === "middle_options"; }
+function isSpread(kind) { return kind === "spread"; }
 
 function renderOrder(order) {
     const container = document.getElementById("orders-container");
+    const orderId   = (order._orderId !== undefined) ? order._orderId : nextOrderId++;
 
-    const orderId = (order._orderId !== undefined) ? order._orderId : nextOrderId++;
-
-    // Register orders in the appropriate resting registry
     if (isSpread(order.order_kind)) {
         const key   = order.spread_label;
         const price = parseFloat(order.price ?? order.customer_price);
@@ -599,24 +251,20 @@ function renderOrder(order) {
         }
     }
 
-    const row = document.createElement("div");
-    row.className = "order-row";
+    const row  = document.createElement("div");
+    row.className    = "order-row";
     row.dataset.orderId = orderId;
 
     const text = document.createElement("span");
     text.innerText = audioMode ? `Trade ${++tradeCounter}` : order.sentence;
 
-    const tradeBtn = document.createElement("button");
+    const tradeBtn   = document.createElement("button");
     tradeBtn.innerText = "Trade Order";
 
-    // ---- decision-time state ----
     let intervalId = null;
 
     function clearTimer() {
-        if (intervalId !== null) {
-            clearInterval(intervalId);
-            intervalId = null;
-        }
+        if (intervalId !== null) { clearInterval(intervalId); intervalId = null; }
         row.classList.remove("order-row-flashing");
     }
 
@@ -638,7 +286,6 @@ function renderOrder(order) {
 
     row.append(text, tradeBtn);
 
-    // Leave Order button (only when decision time is active)
     let leaveBtn = null;
     if (decisionTime !== null) {
         leaveBtn = document.createElement("button");
@@ -646,7 +293,6 @@ function renderOrder(order) {
         row.appendChild(leaveBtn);
     }
 
-    // Speak again button (only shown when audio mode is active)
     if (order.speak && audioMode) {
         const speakBtn = document.createElement("button");
         speakBtn.innerText = "Speak again";
@@ -654,23 +300,21 @@ function renderOrder(order) {
         row.appendChild(speakBtn);
     }
 
-    // Countdown timer (only when decision time is active)
     if (decisionTime !== null) {
         const timerSpan = document.createElement("span");
         timerSpan.className = "order-timer";
-        timerSpan.innerText = "...";   // waiting for speech to finish
+        timerSpan.innerText = "...";
         row.appendChild(timerSpan);
 
-        let remaining = decisionTime;
+        let remaining   = decisionTime;
         let pollTimeout = null;
 
-        // Also cancel any pending poll when clearing
         const origClearTimer = clearTimer;
         function clearTimerFull() {
             if (pollTimeout !== null) { clearTimeout(pollTimeout); pollTimeout = null; }
             origClearTimer();
         }
-        // Patch clearTimer references to use the extended version
+
         tradeBtn.onclick = () => {
             clearTimerFull();
             const prefix = isSpread(order.order_kind) ? "SPREAD" : isOpt(order.order_kind) ? "OPT" : "COMBO";
@@ -693,8 +337,7 @@ function renderOrder(order) {
                 remaining -= 1;
                 timerSpan.innerText = `${remaining}s`;
                 if (remaining <= 0) {
-                    clearInterval(intervalId);
-                    intervalId = null;
+                    clearInterval(intervalId); intervalId = null;
                     row.classList.add("order-row-flashing");
                 }
             }, 1000);
@@ -728,11 +371,6 @@ function renderOrder(order) {
 
 /* ================= CROSS AVOIDANCE ================= */
 
-// Mutates order.price / order.customer_price (and sentence/speak) if the order
-// would cross an existing resting order for the same instrument.
-// Returns false  – no cross, nothing changed
-//         true   – price was adjusted, proceed normally
-//         "skip" – adjusted price would be ≤ 0, discard the order
 function adjustForCross(order) {
     const isOptions = isOpt(order.order_kind);
     const price = parseFloat(order.price ?? order.customer_price);
@@ -751,34 +389,29 @@ function adjustForCross(order) {
         const offers = registry.filter(o => o.side === "offer");
         if (!offers.length) return false;
         const bestOffer = Math.min(...offers.map(o => o.price));
-        if (price < bestOffer) return false;               // no cross
+        if (price < bestOffer) return false;
         newPrice = parseFloat((bestOffer - 0.01).toFixed(2));
     } else {
         const bids = registry.filter(o => o.side === "bid");
         if (!bids.length) return false;
         const bestBid = Math.max(...bids.map(o => o.price));
-        if (price > bestBid) return false;                 // no cross
+        if (price > bestBid) return false;
         newPrice = parseFloat((bestBid + 0.01).toFixed(2));
     }
 
     if (newPrice <= 0) return "skip";
 
-    // Patch price and any text that contains the old price
     const oldStr = price.toFixed(2);
     const newStr = newPrice.toFixed(2);
     if (order.price          !== undefined) order.price          = newPrice;
     if (order.customer_price !== undefined) order.customer_price = newPrice;
     if (order.sentence) order.sentence = order.sentence.replace(oldStr, newStr);
     if (order.speak)    order.speak    = order.speak.replace(oldStr, newStr);
-
     return true;
 }
 
 /* ================= DUPLICATE-ORDER SUPPRESSION ================= */
 
-// Returns true (suppress) if a resting order already exists for the same
-// instrument on the same side AND the new order does not improve upon it.
-// Suppression is probabilistic (85%) so it is a strong bias, not a hard block.
 function shouldSuppressOrder(order) {
     const isOptions = isOpt(order.order_kind);
     const price     = parseFloat(order.price ?? order.customer_price);
@@ -796,7 +429,6 @@ function shouldSuppressOrder(order) {
     const sameSide = registry.filter(o => o.side === side);
     if (!sameSide.length) return false;
 
-    // Allow if the new order improves on the current best
     if (side === "bid") {
         const bestBid = Math.max(...sameSide.map(o => o.price));
         if (price > bestBid) return false;
@@ -804,9 +436,31 @@ function shouldSuppressOrder(order) {
         const bestOffer = Math.min(...sameSide.map(o => o.price));
         if (price < bestOffer) return false;
     }
-
-    // Non-improving duplicate: suppress with 85% probability
     return Math.random() < 0.85;
+}
+
+/* ================= BOARD CELL HELPERS (no-op when board is on /starting_info) ================= */
+
+function updateBoardCellFromResting(order) {
+    const label = order.option_label;
+    if (!label) return;
+    const price = parseFloat(order.price ?? order.customer_price);
+    const side  = order.side;
+    const size  = order.size;
+    if (!side || isNaN(price) || !size) return;
+    if (!cellRestingOrders[label]) cellRestingOrders[label] = [];
+    cellRestingOrders[label].push({ side, price, size, orderId: order._orderId });
+    // Board DOM lives on /starting_info; refreshCellFromOrders is a no-op here.
+}
+
+function deregisterCellOrder(order) {
+    const label = order.option_label;
+    if (!label || !cellRestingOrders[label]) return;
+    const price = parseFloat(order.price ?? order.customer_price);
+    const idx = cellRestingOrders[label].findIndex(
+        o => o.side === order.side && Math.abs(o.price - price) < 0.001 && o.size === order.size
+    );
+    if (idx !== -1) cellRestingOrders[label].splice(idx, 1);
 }
 
 /* ================= GENERATE ORDER ================= */
@@ -838,25 +492,21 @@ function generateOptionsOrder() {
 }
 
 function clampOtmToExistingBest(order) {
-    // Ensure a new OTM bid is never behind an existing best bid, and a new
-    // OTM offer is never behind an existing best offer.
     const registry = cellRestingOrders[order.option_label] || [];
     let clampedPrice = null;
-
     if (order.side === "bid") {
         const existing = registry.filter(o => o.side === "bid");
         if (!existing.length) return;
         const bestBid = Math.max(...existing.map(o => o.price));
-        if (parseFloat(order.customer_price) >= bestBid) return; // already at or better
+        if (parseFloat(order.customer_price) >= bestBid) return;
         clampedPrice = bestBid;
     } else {
         const existing = registry.filter(o => o.side === "offer");
         if (!existing.length) return;
         const bestOffer = Math.min(...existing.map(o => o.price));
-        if (parseFloat(order.customer_price) <= bestOffer) return; // already at or better
+        if (parseFloat(order.customer_price) <= bestOffer) return;
         clampedPrice = bestOffer;
     }
-
     const oldStr = parseFloat(order.customer_price).toFixed(2);
     const newStr = clampedPrice.toFixed(2);
     order.customer_price = clampedPrice;
@@ -887,7 +537,6 @@ function generateRandomOrder() {
     else generateMiddleOptionOrder();
 }
 
-
 function makeRandomMarket() {
     if (strategyLegs.length > 0) { makeDirectedOptionsMarket(strategyLegs.shift()); return; }
     const r = Math.random();
@@ -898,65 +547,55 @@ function makeRandomMarket() {
 
 /* ================= STRATEGY ENGINE ================= */
 
-// After an options order rests, detect if it forms leg 1 of a known strategy
-// and probabilistically enqueue the natural companion leg for the next click.
 function detectAndEnqueueCompanion(order) {
     if (!isOpt(order.order_kind)) return;
-    if (strategyLegs.length > 0) return;       // already have a queued companion
-    if (Math.random() > 0.5) return;            // 50 % chance of strategy follow-up
+    if (strategyLegs.length > 0) return;
+    if (Math.random() > 0.5) return;
 
     const label = order.option_label || "";
     const parts = label.split(" ");
     if (parts.length < 2) return;
     const S       = parseFloat(parts[0]);
-    const optType = parts[1];                   // "call" or "put"
+    const optType = parts[1];
     const side    = order.side;
     const t       = tickSize;
 
-    // Companion rules — strategy → (preferred_side, option_type, strike_offset)
-    // Spreads: buy low / sell high (calls); buy high / sell low (puts)
-    // Risk reversals: buy call + sell put (long RR), or sell call + buy put (short RR)
     let candidates = [];
-
     if (side === "bid" && optType === "call") {
         candidates = [
-            { strike: S + t,   option_type: "call", preferred_side: "offer" },  // long call spread (5)
-            { strike: S + 2*t, option_type: "call", preferred_side: "offer" },  // long call spread (10)
-            { strike: S - t,   option_type: "put",  preferred_side: "offer" },  // long RR (5)
-            { strike: S - 2*t, option_type: "put",  preferred_side: "offer" },  // long RR (10)
+            { strike: S + t,   option_type: "call", preferred_side: "offer" },
+            { strike: S + 2*t, option_type: "call", preferred_side: "offer" },
+            { strike: S - t,   option_type: "put",  preferred_side: "offer" },
+            { strike: S - 2*t, option_type: "put",  preferred_side: "offer" },
         ];
     } else if (side === "offer" && optType === "call") {
         candidates = [
-            { strike: S + t,   option_type: "call", preferred_side: "bid" },    // short call spread (5)
-            { strike: S + 2*t, option_type: "call", preferred_side: "bid" },    // short call spread (10)
-            { strike: S - t,   option_type: "put",  preferred_side: "bid" },    // short RR (5)
-            { strike: S - 2*t, option_type: "put",  preferred_side: "bid" },    // short RR (10)
+            { strike: S + t,   option_type: "call", preferred_side: "bid" },
+            { strike: S + 2*t, option_type: "call", preferred_side: "bid" },
+            { strike: S - t,   option_type: "put",  preferred_side: "bid" },
+            { strike: S - 2*t, option_type: "put",  preferred_side: "bid" },
         ];
     } else if (side === "bid" && optType === "put") {
         candidates = [
-            { strike: S - t,   option_type: "put",  preferred_side: "offer" },  // long put spread (5)
-            { strike: S - 2*t, option_type: "put",  preferred_side: "offer" },  // long put spread (10)
-            { strike: S + t,   option_type: "call", preferred_side: "offer" },  // short RR (5)
-            { strike: S + 2*t, option_type: "call", preferred_side: "offer" },  // short RR (10)
+            { strike: S - t,   option_type: "put",  preferred_side: "offer" },
+            { strike: S - 2*t, option_type: "put",  preferred_side: "offer" },
+            { strike: S + t,   option_type: "call", preferred_side: "offer" },
+            { strike: S + 2*t, option_type: "call", preferred_side: "offer" },
         ];
     } else if (side === "offer" && optType === "put") {
         candidates = [
-            { strike: S - t,   option_type: "put",  preferred_side: "bid" },    // short put spread (5)
-            { strike: S - 2*t, option_type: "put",  preferred_side: "bid" },    // short put spread (10)
-            { strike: S + t,   option_type: "call", preferred_side: "bid" },    // long RR (5)
-            { strike: S + 2*t, option_type: "call", preferred_side: "bid" },    // long RR (10)
+            { strike: S - t,   option_type: "put",  preferred_side: "bid" },
+            { strike: S - 2*t, option_type: "put",  preferred_side: "bid" },
+            { strike: S + t,   option_type: "call", preferred_side: "bid" },
+            { strike: S + 2*t, option_type: "call", preferred_side: "bid" },
         ];
     }
 
     const valid = candidates.filter(c => isOnBoard(c.strike));
     if (!valid.length) return;
-
-    const chosen = valid[Math.floor(Math.random() * valid.length)];
-    strategyLegs.push(chosen);
+    strategyLegs.push(valid[Math.floor(Math.random() * valid.length)]);
 }
 
-// Fetch a directed option order from the backend and route it through the
-// standard display pipeline (cross-avoidance, suppression, board update).
 function fetchDirectedOptionOrder(companion) {
     const url = `/generate_directed_option_order?strike=${companion.strike}`
               + `&option_type=${companion.option_type}`
@@ -971,15 +610,14 @@ function fetchDirectedOptionOrder(companion) {
             speakIfEnabled("order: " + order.speak);
             updateBoardCellFromResting(order);
             renderOrder(order);
-            detectAndEnqueueCompanion(order);   // allow chains (3-leg etc.)
+            detectAndEnqueueCompanion(order);
         });
 }
 
-/* ================= ANY OPTIONS (all strikes) ================= */
+/* ================= ANY OPTIONS ================= */
 
 function makeAnyOptionsMarket() {
     if (strategyLegs.length > 0) { makeDirectedOptionsMarket(strategyLegs.shift()); return; }
-    // OTM options have no make-market modal flow, so pool is ITM + middle.
     if (Math.random() < 0.5) makeOptionsMarket();
     else makeMiddleOptionsMarket();
 }
@@ -996,10 +634,14 @@ function generateAnyOptionsOrder() {
 
 function openMarketModal(order, title) {
     pendingMarket = order;
-    document.getElementById("market-text").innerText = title;
-    document.getElementById("bid-input").value = "";
+    const qw = document.getElementById("quoting-window");
+    document.getElementById("quoting-title").textContent = title || "Make a market";
+    document.getElementById("bid-input").value   = "";
     document.getElementById("offer-input").value = "";
-    document.getElementById("market-modal").style.display = "flex";
+    document.getElementById("quoting-inputs").style.display = "";
+    qw.classList.remove("quoting-window--idle", "quoting-window--flashing");
+    qw.classList.add("quoting-window--active");
+    document.getElementById("bid-input").focus();
     startModalTimer();
 }
 
@@ -1028,15 +670,6 @@ function makeMiddleOptionsMarket() {
         .then(order => {
             speakIfEnabled("market: " + order.announce);
             openMarketModal(order, audioMode ? "" : `${order.size}x ${order.option_label}`);
-        });
-}
-
-function makeSpreadMarket() {
-    fetch("/make_spread_market")
-        .then(r => r.json())
-        .then(order => {
-            speakIfEnabled("market: " + order.announce);
-            openMarketModal(order, audioMode ? "" : `${order.size}x ${order.spread_label}`);
         });
 }
 
@@ -1128,10 +761,14 @@ function submitMarket() {
     })
     .then(r => r.json())
     .then(result => {
-        document.getElementById("market-modal").style.display = "none";
+        // Reset quoting window
+        const qw = document.getElementById("quoting-window");
+        qw.classList.remove("quoting-window--active", "quoting-window--flashing");
+        qw.classList.add("quoting-window--idle");
+        document.getElementById("quoting-title").textContent  = "No active market";
+        document.getElementById("quoting-inputs").style.display = "none";
 
         if (result.type === "trade") {
-            updateStock(result.stock);
             speakIfEnabled("trade: " + result.speak);
             const sideWord = result.side === "bid" ? "sold" : "bought";
             if (isOptions) {
@@ -1151,305 +788,6 @@ function submitMarket() {
         renderOrder(result);
         if (isOptions) detectAndEnqueueCompanion(result);
     });
-}
-
-/* ================= UPDATE BOARD CELL FROM RESTING ORDER ================= */
-
-function updateBoardCellFromResting(order) {
-    const label = order.option_label;
-    if (!label) return;
-    const price = parseFloat(order.price ?? order.customer_price);
-    const side  = order.side;
-    const size  = order.size;
-    if (!side || isNaN(price) || !size) return;
-
-    if (!cellRestingOrders[label]) cellRestingOrders[label] = [];
-    cellRestingOrders[label].push({ side, price, size, orderId: order._orderId });
-    refreshCellFromOrders(label);
-}
-
-function deregisterCellOrder(order) {
-    const label = order.option_label;
-    if (!label || !cellRestingOrders[label]) return;
-    const price = parseFloat(order.price ?? order.customer_price);
-    const idx = cellRestingOrders[label].findIndex(
-        o => o.side === order.side && Math.abs(o.price - price) < 0.001 && o.size === order.size
-    );
-    if (idx !== -1) cellRestingOrders[label].splice(idx, 1);
-    refreshCellFromOrders(label);
-}
-
-function refreshCellFromOrders(label) {
-    const parts = (label || "").split(" ");
-    if (parts.length < 2) return;
-    const strikeNum = parseFloat(parts[0]);
-    const optSide   = parts[1];
-
-    let targetRow = null;
-    document.querySelectorAll("tr[data-strike]").forEach(row => {
-        if (parseFloat(row.dataset.strike) === strikeNum) targetRow = row;
-    });
-    if (!targetRow) return;
-
-    const td = targetRow.querySelector(`.${optSide}`);
-    if (!td) return;
-
-    const remaining = cellRestingOrders[label] || [];
-    const bids      = remaining.filter(o => o.side === "bid");
-    const offers    = remaining.filter(o => o.side === "offer");
-    const bestBid   = bids.length   ? bids.reduce((b, o)   => o.price > b.price ? o : b)   : null;
-    const bestOffer = offers.length ? offers.reduce((b, o) => o.price < b.price ? o : b) : null;
-
-    const lockedSpan = td.querySelector(".option-locked");
-
-    if (lockedSpan) {
-        if (!lockedSpan.dataset.originalText) {
-            lockedSpan.dataset.originalText = lockedSpan.textContent;
-        }
-        const spanParts = lockedSpan.dataset.originalText.split(" - ");
-        if (spanParts.length < 2) return;
-
-        const bidHtml = bestBid
-            ? `<strong>${bestBid.price.toFixed(2)} (${bestBid.size}x)</strong>`
-            : spanParts[0];
-        const askHtml = bestOffer
-            ? `<strong>${bestOffer.price.toFixed(2)} (${bestOffer.size}x)</strong>`
-            : spanParts[1];
-
-        td.dataset.customerBid = bestBid   ? bestBid.price   : "";
-        td.dataset.customerAsk = bestOffer ? bestOffer.price : "";
-        td.dataset.bidHtml = bidHtml;
-        td.dataset.askHtml = askHtml;
-        lockedSpan.innerHTML = `${bidHtml} - ${askHtml}`;
-
-    } else {
-        const bidInput = td.querySelector(".option-bid");
-        const askInput = td.querySelector(".option-ask");
-
-        if (bestBid) {
-            const cur = parseFloat(bidInput.value);
-            if (isNaN(cur) || bestBid.price > cur) {
-                td.dataset.customerBid = bestBid.price;
-                bidInput.value = bestBid.price.toFixed(2);
-            }
-        }
-        if (bestOffer) {
-            const cur = parseFloat(askInput.value);
-            if (isNaN(cur) || bestOffer.price < cur) {
-                td.dataset.customerAsk = bestOffer.price;
-                askInput.value = bestOffer.price.toFixed(2);
-            }
-        }
-    }
-}
-
-/* ================= STOCK TRADING ================= */
-
-function submitStockTrade(side) {
-    const sizeInputId = side === "buy" ? "buy-size-input" : "sell-size-input";
-    const priceInputId = side === "buy" ? "buy-price-input" : "sell-price-input";
-    const rawSize = parseFloat(document.getElementById(sizeInputId).value);
-    const size = rawSize / 100;
-    const price = document.getElementById(priceInputId).value;
-
-    fetch("/trade_stock", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ side, size, price })
-    })
-    .then(r => r.json())
-    .then(result => {
-        if (result.stock) {
-            updateStock(result.stock);
-        }
-        const msg = result.message || "Stock order submitted";
-        showStockMessage(msg);
-        if (result.ok && result.traded > 0) {
-            addTapeEntry("STOCK: " + msg);
-        }
-    })
-    .catch(() => showStockMessage("Stock order failed"));
-}
-
-function showStockMessage(message) {
-    document.getElementById("stock-trade-message").innerText = message;
-}
-
-function updateStock(/* stock */) {
-    fetchLadder();
-}
-
-/* ================= STOCK LADDER ================= */
-
-let ladderMsgTimer = null;
-let shiftActive = false;
-
-// Shift key enables trading mode: freeze price rows and turn them red
-document.addEventListener("keydown", function (e) {
-    if (e.key === "Shift" && !shiftActive) {
-        shiftActive = true;
-        const panel = document.querySelector(".right-ladder");
-        if (panel) panel.classList.add("shift-trading");
-    }
-});
-
-document.addEventListener("keyup", function (e) {
-    if (e.key === "Shift") {
-        shiftActive = false;
-        const panel = document.querySelector(".right-ladder");
-        if (panel) panel.classList.remove("shift-trading");
-    }
-});
-
-function fetchLadder() {
-    fetch("/get_ladder")
-        .then(r => r.json())
-        .then(renderLadder)
-        .catch(() => {});
-}
-
-function renderLadder(data) {
-    const tbody = document.getElementById("ladder-body");
-    if (!tbody) return;
-
-    // While Shift is held: freeze row positions, only refresh liquidity in-place
-    if (shiftActive && tbody.children.length > 0) {
-        const rowMap = {};
-        Array.from(tbody.querySelectorAll("tr[data-price]")).forEach(tr => {
-            rowMap[tr.dataset.price] = tr;
-        });
-        data.rows.forEach(row => {
-            const tr = rowMap[String(row.price)];
-            if (!tr) return;
-            // cells: 0=filledBuy 1=youBuy 2=bid 3=price 4=offer 5=youSell 6=filledSell
-            tr.cells[0].textContent = row.filled_buy  != null ? row.filled_buy.toLocaleString()  : "";
-            tr.cells[1].textContent = row.you_buy     != null ? row.you_buy.toLocaleString()     : "";
-            tr.cells[2].textContent = row.bid         != null ? row.bid.toLocaleString()         : "";
-            tr.cells[4].textContent = row.offer       != null ? row.offer.toLocaleString()       : "";
-            tr.cells[5].textContent = row.you_sell    != null ? row.you_sell.toLocaleString()    : "";
-            tr.cells[6].textContent = row.filled_sell != null ? row.filled_sell.toLocaleString() : "";
-        });
-        return;
-    }
-
-    // Full re-render when Shift is not held
-    tbody.innerHTML = "";
-
-    data.rows.forEach(row => {
-        const tr = document.createElement("tr");
-        tr.dataset.price = row.price;
-
-        if (row.is_mid) {
-            tr.className = "ladder-mid";
-        } else if (row.side === "offer") {
-            tr.className = "ladder-offer-row";
-        } else if (row.side === "bid") {
-            tr.className = "ladder-bid-row";
-        } else {
-            tr.className = "ladder-spread-row";
-        }
-
-        const priceStr   = parseFloat(row.price).toFixed(2);
-        const filledBuy  = row.filled_buy  != null ? row.filled_buy.toLocaleString()  : "";
-        const filledSell = row.filled_sell != null ? row.filled_sell.toLocaleString() : "";
-        const youBuy     = row.you_buy     != null ? row.you_buy.toLocaleString()     : "";
-        const youSell    = row.you_sell    != null ? row.you_sell.toLocaleString()    : "";
-        const bid        = row.bid         != null ? row.bid.toLocaleString()         : "";
-        const offer      = row.offer       != null ? row.offer.toLocaleString()       : "";
-
-        tr.innerHTML =
-            `<td class="lc-filled-buy">${filledBuy}</td>` +
-            `<td class="lc-you-buy" data-price="${row.price}">${youBuy}</td>` +
-            `<td class="lc-bid">${bid}</td>` +
-            `<td class="lc-price${row.is_mid ? " lc-mid" : ""}">${priceStr}</td>` +
-            `<td class="lc-offer">${offer}</td>` +
-            `<td class="lc-you-sell" data-price="${row.price}">${youSell}</td>` +
-            `<td class="lc-filled-sell">${filledSell}</td>`;
-
-        tbody.appendChild(tr);
-    });
-
-    tbody.querySelectorAll(".lc-you-buy").forEach(cell => {
-        cell.addEventListener("dblclick", function (e) {
-            e.preventDefault();
-            if (!shiftActive) return;
-            placeLadderOrder("buy", parseFloat(this.dataset.price));
-        });
-    });
-    tbody.querySelectorAll(".lc-you-sell").forEach(cell => {
-        cell.addEventListener("dblclick", function (e) {
-            e.preventDefault();
-            if (!shiftActive) return;
-            placeLadderOrder("sell", parseFloat(this.dataset.price));
-        });
-    });
-}
-
-function placeLadderOrder(side, price) {
-    const qty = parseInt(document.getElementById("ladder-order-size").value) || 1000;
-    fetch("/place_ladder_order", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ side, price, qty })
-    })
-    .then(r => r.json())
-    .then(result => {
-        showLadderMessage(result.message || "Order placed");
-        if (result.ok && result.filled > 0) {
-            addTapeEntry("STOCK: " + result.message);
-        }
-        fetchLadder();
-    })
-    .catch(() => showLadderMessage("Order failed"));
-}
-
-function cancelAllLadderOrders() {
-    fetch("/cancel_ladder_orders", { method: "POST" })
-        .then(r => r.json())
-        .then(result => {
-            showLadderMessage(result.message);
-            fetchLadder();
-        })
-        .catch(() => showLadderMessage("Cancel failed"));
-}
-
-function togglePause() {
-    fetch("/toggle_pause", { method: "POST" })
-        .then(r => r.json())
-        .then(data => {
-            const btn = document.getElementById("pause-btn");
-            if (data.paused) {
-                btn.textContent = "▶ Resume";
-                btn.classList.add("ladder-pause-btn--paused");
-            } else {
-                btn.textContent = "⏸ Pause";
-                btn.classList.remove("ladder-pause-btn--paused");
-            }
-        });
-}
-
-function showLadderMessage(msg) {
-    const el = document.getElementById("ladder-message");
-    if (!el) return;
-    el.textContent = msg;
-    if (ladderMsgTimer) clearTimeout(ladderMsgTimer);
-    ladderMsgTimer = setTimeout(() => { el.textContent = ""; }, 5000);
-}
-
-fetchLadder();
-setInterval(fetchLadder, 100);
-
-/* ================= OPENING ORDER ================= */
-
-function generateOpeningOrder() {
-    fetch("/generate_opening_order")
-        .then(r => r.json())
-        .then(order => {
-            order._orderId = nextOrderId++;
-            speakIfEnabled("order: " + order.speak);
-            if (isOpt(order.order_kind)) updateBoardCellFromResting(order);
-            renderOrder(order);
-        });
 }
 
 </script>

@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Stock Ladder</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <style>
+        body { margin: 0; background: #f5f5f5; }
+        .ladder-page-wrapper {
+            display: flex;
+            justify-content: center;
+            padding: 20px;
+        }
+        .ladder-standalone {
+            width: 640px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="ladder-page-wrapper">
+<div class="ladder-standalone">
+    <div class="ladder-panel">
+        <div class="ladder-config">
+            <label class="ladder-config-label">Size</label>
+            <input id="ladder-order-size" type="number" value="1000" min="100" step="100" class="ladder-size-input">
+            <button class="ladder-cancel-btn" onclick="cancelAllLadderOrders()">Cancel Orders</button>
+            <button id="pause-btn" class="ladder-pause-btn" onclick="togglePause()">⏸ Pause</button>
+        </div>
+        <div class="ladder-scroll">
+            <table class="stock-ladder">
+                <thead>
+                    <tr>
+                        <th class="lh-filled">filled</th>
+                        <th class="lh-you">you</th>
+                        <th class="lh-bid">bid</th>
+                        <th class="lh-price">price</th>
+                        <th class="lh-offer">offer</th>
+                        <th class="lh-you">you</th>
+                        <th class="lh-filled">filled</th>
+                    </tr>
+                </thead>
+                <tbody id="ladder-body"></tbody>
+            </table>
+        </div>
+        <div id="ladder-message" class="ladder-message"></div>
+    </div>
+</div>
+</div>
+
+<script>
+let ladderMsgTimer = null;
+let shiftActive = false;
+
+document.addEventListener("keydown", function (e) {
+    if (e.key === "Shift" && !shiftActive) {
+        shiftActive = true;
+        const panel = document.querySelector(".ladder-standalone");
+        if (panel) panel.classList.add("shift-trading");
+    }
+});
+
+document.addEventListener("keyup", function (e) {
+    if (e.key === "Shift") {
+        shiftActive = false;
+        const panel = document.querySelector(".ladder-standalone");
+        if (panel) panel.classList.remove("shift-trading");
+    }
+});
+
+function fetchLadder() {
+    fetch("/get_ladder")
+        .then(r => r.json())
+        .then(renderLadder)
+        .catch(() => {});
+}
+
+function renderLadder(data) {
+    const tbody = document.getElementById("ladder-body");
+    if (!tbody) return;
+
+    if (shiftActive && tbody.children.length > 0) {
+        const rowMap = {};
+        Array.from(tbody.querySelectorAll("tr[data-price]")).forEach(tr => {
+            rowMap[tr.dataset.price] = tr;
+        });
+        data.rows.forEach(row => {
+            const tr = rowMap[String(row.price)];
+            if (!tr) return;
+            tr.cells[0].textContent = row.filled_buy  != null ? row.filled_buy.toLocaleString()  : "";
+            tr.cells[1].textContent = row.you_buy     != null ? row.you_buy.toLocaleString()     : "";
+            tr.cells[2].textContent = row.bid         != null ? row.bid.toLocaleString()         : "";
+            tr.cells[4].textContent = row.offer       != null ? row.offer.toLocaleString()       : "";
+            tr.cells[5].textContent = row.you_sell    != null ? row.you_sell.toLocaleString()    : "";
+            tr.cells[6].textContent = row.filled_sell != null ? row.filled_sell.toLocaleString() : "";
+        });
+        return;
+    }
+
+    tbody.innerHTML = "";
+
+    data.rows.forEach(row => {
+        const tr = document.createElement("tr");
+        tr.dataset.price = row.price;
+
+        if (row.is_mid) {
+            tr.className = "ladder-mid";
+        } else if (row.side === "offer") {
+            tr.className = "ladder-offer-row";
+        } else if (row.side === "bid") {
+            tr.className = "ladder-bid-row";
+        } else {
+            tr.className = "ladder-spread-row";
+        }
+
+        const priceStr   = parseFloat(row.price).toFixed(2);
+        const filledBuy  = row.filled_buy  != null ? row.filled_buy.toLocaleString()  : "";
+        const filledSell = row.filled_sell != null ? row.filled_sell.toLocaleString() : "";
+        const youBuy     = row.you_buy     != null ? row.you_buy.toLocaleString()     : "";
+        const youSell    = row.you_sell    != null ? row.you_sell.toLocaleString()    : "";
+        const bid        = row.bid         != null ? row.bid.toLocaleString()         : "";
+        const offer      = row.offer       != null ? row.offer.toLocaleString()       : "";
+
+        tr.innerHTML =
+            `<td class="lc-filled-buy">${filledBuy}</td>` +
+            `<td class="lc-you-buy" data-price="${row.price}">${youBuy}</td>` +
+            `<td class="lc-bid">${bid}</td>` +
+            `<td class="lc-price${row.is_mid ? " lc-mid" : ""}">${priceStr}</td>` +
+            `<td class="lc-offer">${offer}</td>` +
+            `<td class="lc-you-sell" data-price="${row.price}">${youSell}</td>` +
+            `<td class="lc-filled-sell">${filledSell}</td>`;
+
+        tbody.appendChild(tr);
+    });
+
+    tbody.querySelectorAll(".lc-you-buy").forEach(cell => {
+        cell.addEventListener("dblclick", function (e) {
+            e.preventDefault();
+            if (!shiftActive) return;
+            placeLadderOrder("buy", parseFloat(this.dataset.price));
+        });
+    });
+    tbody.querySelectorAll(".lc-you-sell").forEach(cell => {
+        cell.addEventListener("dblclick", function (e) {
+            e.preventDefault();
+            if (!shiftActive) return;
+            placeLadderOrder("sell", parseFloat(this.dataset.price));
+        });
+    });
+}
+
+function placeLadderOrder(side, price) {
+    const qty = parseInt(document.getElementById("ladder-order-size").value) || 1000;
+    fetch("/place_ladder_order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ side, price, qty })
+    })
+    .then(r => r.json())
+    .then(result => {
+        showLadderMessage(result.message || "Order placed");
+        fetchLadder();
+    })
+    .catch(() => showLadderMessage("Order failed"));
+}
+
+function cancelAllLadderOrders() {
+    fetch("/cancel_ladder_orders", { method: "POST" })
+        .then(r => r.json())
+        .then(result => {
+            showLadderMessage(result.message);
+            fetchLadder();
+        })
+        .catch(() => showLadderMessage("Cancel failed"));
+}
+
+function togglePause() {
+    fetch("/toggle_pause", { method: "POST" })
+        .then(r => r.json())
+        .then(data => {
+            const btn = document.getElementById("pause-btn");
+            if (data.paused) {
+                btn.textContent = "▶ Resume";
+                btn.classList.add("ladder-pause-btn--paused");
+            } else {
+                btn.textContent = "⏸ Pause";
+                btn.classList.remove("ladder-pause-btn--paused");
+            }
+        });
+}
+
+function showLadderMessage(msg) {
+    const el = document.getElementById("ladder-message");
+    if (!el) return;
+    el.textContent = msg;
+    if (ladderMsgTimer) clearTimeout(ladderMsgTimer);
+    ladderMsgTimer = setTimeout(() => { el.textContent = ""; }, 5000);
+}
+
+fetchLadder();
+setInterval(fetchLadder, 100);
+</script>
+
+</body>
+</html>
